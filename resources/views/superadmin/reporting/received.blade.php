@@ -3,6 +3,16 @@
 @section('title', 'Received Reports')
 
 @section('content')
+<div id="page-loading-overlay" class="page-loading-overlay page-loading-overlay--visible" aria-live="polite" aria-busy="true">
+    <div class="page-loading-card" role="status">
+        <div class="page-loading-spinner" aria-hidden="true"><span></span></div>
+        <div class="page-loading-text-group">
+            <p class="page-loading-title mb-1" data-loading-message>Loading workspace…</p>
+            <p class="page-loading-subtext mb-0" data-loading-subtext>We are syncing the latest data for you.</p>
+        </div>
+        <div class="page-loading-progress" aria-hidden="true"><span></span></div>
+    </div>
+</div>
 <div class="content">
     <div class="d-flex align-items-center justify-content-between flex-wrap gap-3 mb-3">
         <h4 class="mb-0">Received Reports</h4>
@@ -206,6 +216,14 @@
                                         } elseif (!empty($item->issue_date)) {
                                             try {
                                                 $issueValue = \Carbon\Carbon::parse($item->issue_date)->format('Y-m-d');
+                                            } catch (\Throwable $e) {
+                                                $issueValue = '';
+                                            }
+                                        }
+
+                                        if (!$issueValue && $assignedReport && !empty($assignedReport->pivot->issue_to_date)) {
+                                            try {
+                                                $issueValue = \Carbon\Carbon::parse($assignedReport->pivot->issue_to_date)->format('Y-m-d');
                                             } catch (\Throwable $e) {
                                                 $issueValue = '';
                                             }
@@ -414,6 +432,75 @@
 
 @push('scripts')
 <script>
+const LoadingOverlay = (() => {
+    const overlay = document.getElementById('page-loading-overlay');
+    const messageEl = overlay ? overlay.querySelector('[data-loading-message]') : null;
+    const subtextEl = overlay ? overlay.querySelector('[data-loading-subtext]') : null;
+    const defaults = {
+        message: messageEl ? (messageEl.textContent || 'Loading...') : 'Loading...',
+        subtext: subtextEl ? (subtextEl.textContent || 'Please wait a moment.') : 'Please wait a moment.'
+    };
+    let active = 0;
+    const setVisible = (visible) => {
+        if (!overlay) return;
+        overlay.classList.toggle('page-loading-overlay--visible', visible);
+        overlay.setAttribute('aria-busy', String(visible));
+    };
+    const setCopy = (message, subtext) => {
+        if (messageEl) {
+            messageEl.textContent = (typeof message === 'string' && message.trim().length)
+                ? message
+                : defaults.message;
+        }
+        if (subtextEl) {
+            subtextEl.textContent = (typeof subtext === 'string' && subtext.trim().length)
+                ? subtext
+                : defaults.subtext;
+        }
+    };
+    const api = {
+        show(message, subtext) {
+            if (!overlay) return;
+            active += 1;
+            setCopy(message, subtext);
+            setVisible(true);
+        },
+        hide(force = false) {
+            if (!overlay) return;
+            active = force ? 0 : Math.max(0, active - 1);
+            if (active === 0) setVisible(false);
+        },
+        wrap(task, message, subtext) {
+            if (typeof task !== 'function') return Promise.resolve();
+            api.show(message, subtext);
+            let result;
+            try {
+                result = task();
+            } catch (err) {
+                api.hide();
+                return Promise.reject(err);
+            }
+            return Promise.resolve(result)
+                .then((value) => {
+                    api.hide();
+                    return value;
+                })
+                .catch((error) => {
+                    api.hide();
+                    throw error;
+                });
+        }
+    };
+    const finishInitial = () => api.hide(true);
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', finishInitial, { once: true });
+    } else {
+        finishInitial();
+    }
+    window.addEventListener('beforeunload', () => api.show('Loading next view…', 'Hang tight while we redirect.'));
+    return api;
+})();
+
 (function initReceivedPage() {
     const init = function() {
         // Safe JSON parser for fetch responses
@@ -692,7 +779,10 @@
                     return;
                 }
                 if (lettersListEl) lettersListEl.innerHTML = '<div class="text-muted">Loading...</div>';
-                const resp = await fetch(listUrl, { headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' } });
+                const resp = await LoadingOverlay.wrap(
+                    () => fetch(listUrl, { headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' } }),
+                    showModal ? 'Loading letters...' : 'Refreshing letters...'
+                );
                 const data = await resp.json();
                 const letters = Array.isArray(data.letters) ? data.letters : [];
                 if (lettersListEl) {
@@ -806,14 +896,14 @@
                 const token = uploadForm.querySelector('input[name="_token"]').value;
                 const fd = new FormData(uploadForm);
                 if (btn) { btn.disabled = true; btn.textContent = 'Uploading...'; }
-                fetch(uploadForm.action, {
-                    method: 'POST',
-                    headers: { 'X-CSRF-TOKEN': token, 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
-                    body: fd
-                }).then(async (resp) => {
-                    const data = await resp.json().catch(() => null);
-                    return data;
-                }).then(function(data) {
+                LoadingOverlay.wrap(async () => {
+                    const resp = await fetch(uploadForm.action, {
+                        method: 'POST',
+                        headers: { 'X-CSRF-TOKEN': token, 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                        body: fd
+                    });
+                    return resp.json().catch(() => null);
+                }, 'Uploading files...').then(function(data) {
                     if (data && data.ok) {
                         if (window.Swal) { Swal.fire({ icon: 'success', title: 'Uploaded', text: 'Letters uploaded successfully.' }); }
                         loadLetters(false);
@@ -846,14 +936,14 @@
 
                 if (mode === 'receive') {
                     // Persist as received immediately so it stays visible on refresh
-                    fetch(form.action, {
+                    LoadingOverlay.wrap(() => fetch(form.action, {
                         method: 'POST',
                         headers: {
                             'X-CSRF-TOKEN': form.querySelector('input[name="_token"]').value,
                             'Accept': 'application/json',
                             'X-Requested-With': 'XMLHttpRequest'
                         }
-                    }).then(safeJson).then(data => {
+                    }).then(safeJson), 'Receiving job...').then(data => {
                         if (data && data.ok) {
                             const cell = document.querySelector('.status-cell[data-id="' + id + '"]');
                             if (cell) {
@@ -902,7 +992,7 @@
                     return;
                 }
 
-                fetch(form.action, {
+                LoadingOverlay.wrap(() => fetch(form.action, {
                     method: 'POST',
                     headers: {
                         'X-CSRF-TOKEN': form.querySelector('input[name="_token"]').value,
@@ -911,7 +1001,7 @@
                         'X-Requested-With': 'XMLHttpRequest'
                     },
                     body: new URLSearchParams({ issue_date: issueInput.value })
-    }).then(safeJson).then(data => {
+                }).then(safeJson), 'Saving issue date...').then(data => {
                     if (data && data.ok) {
                         const cell = document.querySelector('.status-cell[data-id="' + id + '"]');
                         if (cell) {
@@ -956,16 +1046,16 @@
                 ev.preventDefault();
                 const csrf = receiveAllForm.querySelector('input[name="_token"]').value;
                 const job = receiveAllForm.querySelector('input[name="job"]').value;
-    fetch(receiveAllForm.action, {
+                LoadingOverlay.wrap(() => fetch(receiveAllForm.action, {
                     method: 'POST',
                     headers: {
                         'X-CSRF-TOKEN': csrf,
                         'Content-Type': 'application/x-www-form-urlencoded',
-            'Accept': 'application/json',
-            'X-Requested-With': 'XMLHttpRequest'
+                        'Accept': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
                     },
                     body: new URLSearchParams({ job })
-        }).then(safeJson).then(data => {
+                }).then(safeJson), 'Receiving all jobs...').then(data => {
                     // Update UI to allow entering issue dates for all rows
                     document.querySelectorAll('.issue-date-input').forEach(function(input) {
                         input.classList.remove('d-none');
@@ -1053,16 +1143,16 @@
                     return { id: Number(id), issue_date: input ? input.value || null : null };
                 });
                 const csrf = submitAllForm.querySelector('input[name="_token"]').value;
-    fetch(submitAllForm.action, {
+                LoadingOverlay.wrap(() => fetch(submitAllForm.action, {
                     method: 'POST',
                     headers: {
                         'X-CSRF-TOKEN': csrf,
                         'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'X-Requested-With': 'XMLHttpRequest'
+                        'Accept': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
                     },
                     body: JSON.stringify({ items })
-        }).then(safeJson).then(data => {
+                }).then(safeJson), 'Submitting issue dates...').then(data => {
                     if (data && data.ok) {
                         if (window.Swal) {
                             Swal.fire({ icon: 'success', title: 'Saved', text: 'All Issue Dates submitted.' });
@@ -1116,32 +1206,56 @@
 
 // js for tab container
 document.addEventListener("DOMContentLoaded", () => {
-  const tabs = document.querySelectorAll(".tab-button");
-  const columnHeader = document.getElementById("column-header");
-  const tableRows = document.querySelectorAll("tbody tr");
+    const tabs = document.querySelectorAll(".tab-button");
+    const columnHeader = document.getElementById("column-header");
+    const STORAGE_KEY = "receivedReportsTab";
 
-  tabs.forEach(tab => {
-    tab.addEventListener("click", () => {
-      tabs.forEach(t => t.classList.remove("active"));
-      tab.classList.add("active");
+    const persistMode = (mode) => {
+        try {
+            localStorage.setItem(STORAGE_KEY, mode);
+        } catch (_) {}
+    };
 
-      const mode = tab.dataset.tab;
+    const readStoredMode = () => {
+        try {
+            return localStorage.getItem(STORAGE_KEY) || "all";
+        } catch (_) {
+            return "all";
+        }
+    };
 
-      if (mode === "issue") {
-        columnHeader.textContent = "Issue Date";
-        tableRows.forEach(row => {
-          row.querySelector(".report-select")?.classList.add("d-none");
-          row.querySelector(".issue-date")?.classList.remove("d-none");
+    const applyMode = (mode) => {
+        const targetTab = Array.from(tabs).find(t => t.dataset.tab === mode) || tabs[0];
+        const normalizedMode = targetTab ? targetTab.dataset.tab : "all";
+
+        tabs.forEach(t => t.classList.remove("active"));
+        targetTab?.classList.add("active");
+
+        const rows = document.querySelectorAll("tbody tr");
+        if (normalizedMode === "issue") {
+            columnHeader.textContent = "Issue Date";
+            rows.forEach(row => {
+                row.querySelector(".report-select")?.classList.add("d-none");
+                row.querySelector(".issue-date")?.classList.remove("d-none");
+            });
+        } else {
+            columnHeader.textContent = "Select Report";
+            rows.forEach(row => {
+                row.querySelector(".report-select")?.classList.remove("d-none");
+                row.querySelector(".issue-date")?.classList.add("d-none");
+            });
+        }
+
+        persistMode(normalizedMode);
+    };
+
+    tabs.forEach(tab => {
+        tab.addEventListener("click", () => {
+            applyMode(tab.dataset.tab || "all");
         });
-      } else {
-        columnHeader.textContent = "Select Report";
-        tableRows.forEach(row => {
-          row.querySelector(".report-select")?.classList.remove("d-none");
-          row.querySelector(".issue-date")?.classList.add("d-none");
-        });
-      }
     });
-  });
+
+    applyMode(readStoredMode());
 });
 
 
@@ -1177,6 +1291,139 @@ document.addEventListener('DOMContentLoaded', () => {
 
 @push('styles')
 <style>
+    .page-loading-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 2050;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: transparent;
+        overflow: visible;
+        pointer-events: none;
+        will-change: opacity;
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 0.25s ease, visibility 0.25s ease;
+    }
+    .page-loading-overlay--visible {
+        opacity: 1;
+        visibility: visible;
+        pointer-events: all;
+    }
+    .page-loading-card {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 18px;
+        padding: 32px 40px;
+        border-radius: 24px;
+        min-width: 280px;
+        background: #050c1f;
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        box-shadow: 0 8px 24px rgba(4, 9, 26, 0.18);
+        color: #f6f9ff;
+        text-align: center;
+        opacity: 0;
+        transform: none;
+        transition: opacity 0.18s cubic-bezier(.4,0,.2,1);
+        pointer-events: auto;
+        will-change: opacity;
+    }
+    .page-loading-overlay--visible .page-loading-card {
+        opacity: 1;
+        transform: none;
+    }
+    .page-loading-spinner {
+        position: relative;
+        width: 54px;
+        height: 54px;
+        will-change: transform;
+    }
+    .page-loading-spinner::before,
+    .page-loading-spinner::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        border-radius: 50%;
+        border: 3px solid transparent;
+    }
+    .page-loading-spinner::before {
+        border-top-color: #42c6ff;
+        border-right-color: #42c6ff;
+        opacity: 0.9;
+        animation: pageLoadingSpin 0.7s cubic-bezier(.4,0,.2,1) infinite;
+    }
+    .page-loading-spinner::after {
+        border-bottom-color: #8cd867;
+        border-left-color: #8cd867;
+        opacity: 0.6;
+        animation: pageLoadingSpin 1.1s cubic-bezier(.4,0,.2,1) infinite reverse;
+    }
+    .page-loading-spinner span {
+        position: absolute;
+        inset: 8px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.05);
+        box-shadow: inset 0 0 4px rgba(66, 198, 255, 0.25);
+        animation: pageLoadingPulse 1.2s cubic-bezier(.4,0,.2,1) infinite;
+    }
+    .page-loading-text-group {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+    .page-loading-title {
+        font-weight: 600;
+        font-size: 1.05rem;
+        letter-spacing: 0.3px;
+    }
+    .page-loading-subtext {
+        font-size: 0.85rem;
+        color: rgba(255, 255, 255, 0.75);
+    }
+    .page-loading-progress {
+        width: 180px;
+        height: 4px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.15);
+        overflow: hidden;
+    }
+    .page-loading-progress span {
+        display: block;
+        width: 45%;
+        height: 100%;
+        background: linear-gradient(90deg, #42c6ff 0%, #8a7dff 50%, #42c6ff 100%);
+        animation: pageLoadingSlide 1.35s ease-in-out infinite;
+    }
+    @keyframes pageLoadingSpin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+    @keyframes pageLoadingPulse {
+        0%, 100% { transform: scale(0.96); opacity: 0.8; }
+        50% { transform: scale(1); opacity: 1; }
+    }
+    @keyframes pageLoadingSlide {
+        0% { transform: translateX(-100%); }
+        50% { transform: translateX(30%); }
+        100% { transform: translateX(110%); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+        .page-loading-spinner::before,
+        .page-loading-spinner::after,
+        .page-loading-progress span,
+        .page-loading-spinner span {
+            animation-duration: 0.01ms;
+            animation-iteration-count: 1;
+        }
+        .page-loading-card {
+            transition: opacity 0.15s ease;
+        }
+    }
     /* Bulk action buttons share consistent sizing */
     .bulk-action-btn {
         min-width: 150px;
