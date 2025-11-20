@@ -443,10 +443,19 @@ const LoadingOverlay = (() => {
         subtext: subtextEl ? (subtextEl.textContent || 'Please wait a moment.') : 'Please wait a moment.'
     };
     let active = 0;
+    let _visible = false;
+    let _hideTimer = null;
+    let _lastShownAt = 0;
+    const MIN_VISIBLE_MS = 220; // keep visible for at least this long to prevent flicker
     const setVisible = (visible) => {
         if (!overlay) return;
         overlay.classList.toggle('page-loading-overlay--visible', visible);
         overlay.setAttribute('aria-busy', String(visible));
+        _visible = Boolean(visible);
+    };
+    const _doHideNow = () => {
+        if (_hideTimer) { clearTimeout(_hideTimer); _hideTimer = null; }
+        setVisible(false);
     };
     const setCopy = (message, subtext) => {
         if (messageEl) {
@@ -465,12 +474,31 @@ const LoadingOverlay = (() => {
             if (!overlay) return;
             active += 1;
             setCopy(message, subtext);
-            setVisible(true);
+            // cancel pending hide
+            if (_hideTimer) { clearTimeout(_hideTimer); _hideTimer = null; }
+            if (!_visible) {
+                setVisible(true);
+                _lastShownAt = Date.now();
+            }
         },
         hide(force = false) {
             if (!overlay) return;
-            active = force ? 0 : Math.max(0, active - 1);
-            if (active === 0) setVisible(false);
+            if (force) {
+                active = 0;
+                _doHideNow();
+                return;
+            }
+            active = Math.max(0, active - 1);
+            if (active === 0) {
+                const elapsed = Date.now() - _lastShownAt;
+                const remaining = Math.max(0, MIN_VISIBLE_MS - elapsed);
+                if (remaining > 15) {
+                    // schedule hide after remaining ms
+                    _hideTimer = setTimeout(() => { _hideTimer = null; _doHideNow(); }, remaining);
+                } else {
+                    _doHideNow();
+                }
+            }
         },
         wrap(task, message, subtext) {
             if (typeof task !== 'function') return Promise.resolve();
@@ -803,29 +831,54 @@ const LoadingOverlay = (() => {
                                 return u.toString();
                             } catch (_) { return raw; }
                         };
+                        const frag = document.createDocumentFragment();
                         letters.forEach(function(l) {
                             const a = document.createElement('a');
                             const url = l.download_url || l.encoded_url || l.url || l.path || '#';
                             const name = (l.name || l.filename || 'Letter');
                             const dateStr = (l.uploaded_at || l.created_at || '');
                             const uploader = l.uploader_name || l.uploaded_by || l.uploader || '';
-                            const isPdf = url.toLowerCase().endsWith('.pdf');
+                            const isPdf = (typeof url === 'string') && url.toLowerCase().endsWith('.pdf');
                             const pages = (typeof l.pages === 'number' && l.pages > 0) ? l.pages : null;
                             a.href = url;
                             a.target = '_blank';
                             a.rel = 'noopener';
                             a.className = 'list-group-item list-group-item-action d-flex justify-content-between align-items-center';
-                            // Left: file name, Right: (page count badge if pdf) + date + uploader
-                            a.innerHTML =
-                                '<span class="me-2 text-truncate" style="max-width:60%">' + name + '</span>' +
-                                '<span class="d-inline-flex align-items-center gap-2 ms-auto">' +
-                                (isPdf ? '<span class="badge rounded-pill bg-light text-dark border pdf-page-count" title="Pages" style="min-width:34px;">' + (pages ? pages + 'p' : '..') + '</span>' : '') +
-                                (uploader ? '<span class="badge bg-info text-dark ms-1" title="Uploaded by">' + uploader + '</span>' : '') +
-                                '<span class="small text-muted ms-2">' + dateStr + '</span>' +
-                                '</span>';
-                            lettersListEl.appendChild(a);
+                            // build left and right parts as nodes to avoid innerHTML reflows
+                            const left = document.createElement('span');
+                            left.className = 'me-2 text-truncate';
+                            left.style.maxWidth = '60%';
+                            left.textContent = name;
+
+                            const right = document.createElement('span');
+                            right.className = 'd-inline-flex align-items-center gap-2 ms-auto';
+
+                            if (isPdf) {
+                                const badge = document.createElement('span');
+                                badge.className = 'badge rounded-pill bg-light text-dark border pdf-page-count';
+                                badge.title = 'Pages';
+                                badge.style.minWidth = '34px';
+                                badge.textContent = pages ? (pages + 'p') : '..';
+                                right.appendChild(badge);
+                            }
+                            if (uploader) {
+                                const up = document.createElement('span');
+                                up.className = 'badge bg-info text-dark ms-1';
+                                up.title = 'Uploaded by';
+                                up.textContent = uploader;
+                                right.appendChild(up);
+                            }
+                            const dt = document.createElement('span');
+                            dt.className = 'small text-muted ms-2';
+                            dt.textContent = dateStr;
+                            right.appendChild(dt);
+
+                            a.appendChild(left);
+                            a.appendChild(right);
+                            frag.appendChild(a);
                             if (isPdf && !pages) pdfAnchors.push(a);
                         });
+                        lettersListEl.appendChild(frag);
                         // Dynamically load pdf.js (only once) and compute page counts
                         if (pdfAnchors.length) {
                             const ensurePdfJs = () => new Promise((resolve, reject) => {
@@ -842,14 +895,14 @@ const LoadingOverlay = (() => {
                                 document.head.appendChild(s);
                             });
                             ensurePdfJs().then(async () => {
+                                // process sequentially with tiny pauses to avoid blocking the UI
+                                const sleep = (ms) => new Promise(r => setTimeout(r, ms));
                                 for (const a of pdfAnchors) {
                                     try {
                                         let raw = a.getAttribute('data-pdf-url') || a.getAttribute('href');
                                         const attempts = [];
                                         if (raw) attempts.push(raw);
-                                        // If relative path missing leading slash
                                         if (raw && raw[0] !== '/') attempts.push('/' + raw);
-                                        // Sanitized
                                         if (raw) attempts.push(sanitizePdfUrl(raw));
                                         let pdf = null, lastErr = null;
                                         for (const candidate of attempts) {
@@ -871,6 +924,8 @@ const LoadingOverlay = (() => {
                                         const span = a.querySelector('.pdf-page-count');
                                         if (span) span.textContent = '?p';
                                     }
+                                    // give the browser a moment to paint between heavy ops
+                                    await sleep(40);
                                 }
                             }).catch(() => {
                                 pdfAnchors.forEach(a => { const span = a.querySelector('.pdf-page-count'); if (span) span.textContent = '?p'; });
@@ -1300,14 +1355,16 @@ document.addEventListener('DOMContentLoaded', () => {
         display: flex;
         align-items: center;
         justify-content: center;
+        min-width: 100vw;
+        min-height: 100vh;
         padding: 24px;
         background: transparent;
         overflow: visible;
         pointer-events: none;
-        will-change: opacity;
         opacity: 0;
         visibility: hidden;
-        transition: opacity 0.25s ease, visibility 0.25s ease;
+        transition: opacity 0.22s cubic-bezier(.4,0,.2,1), visibility 0.22s cubic-bezier(.4,0,.2,1);
+        will-change: opacity;
     }
     .page-loading-overlay--visible {
         opacity: 1;
@@ -1324,20 +1381,19 @@ document.addEventListener('DOMContentLoaded', () => {
         padding: 32px 40px;
         border-radius: 24px;
         min-width: 280px;
+        min-height: 180px;
         background: #050c1f;
         border: 1px solid rgba(255, 255, 255, 0.05);
         box-shadow: 0 8px 24px rgba(4, 9, 26, 0.18);
         color: #f6f9ff;
         text-align: center;
         opacity: 0;
-        transform: none;
         transition: opacity 0.18s cubic-bezier(.4,0,.2,1);
         pointer-events: auto;
         will-change: opacity;
     }
     .page-loading-overlay--visible .page-loading-card {
         opacity: 1;
-        transform: none;
     }
     .page-loading-spinner {
         position: relative;
