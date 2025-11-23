@@ -281,6 +281,7 @@ trait HandlesMarketingExpenses
     {
         $status = $statusOverride ?? $this->getFilterValue($request, 'status', 'all');
         $search = $this->getFilterValue($request, 'search');
+        $marketingPerson = $this->getFilterValue($request, 'marketing_person_code');
         $month  = $this->getFilterValue($request, 'month');
         $year   = $this->getFilterValue($request, 'year');
 
@@ -295,6 +296,14 @@ trait HandlesMarketingExpenses
                         })
                         ->orWhere('person_name', 'like', "%{$search}%")
                         ->orWhere('marketing_person_code', 'like', "%{$search}%");
+                });
+            })
+            ->when($marketingPerson, function($q) use ($marketingPerson){
+                $q->where(function($inner) use ($marketingPerson){
+                    $inner->where('marketing_person_code', $marketingPerson)
+                          ->orWhereHas('marketingPerson', function($m) use ($marketingPerson){
+                              $m->where('user_code', $marketingPerson)->orWhere('id', $marketingPerson);
+                          });
                 });
             })
             ->when($year, fn ($q) => $q->whereYear('created_at', $year))

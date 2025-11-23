@@ -12,6 +12,7 @@ use App\Http\Controllers\SuperAdmin\HoldCancelController;
 use App\Http\Controllers\Superadmin\LabAnalystsController;
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\Superadmin\ProfileController;
+use App\Http\Controllers\Accounts\MarketingExpenseController;
 use App\Http\Controllers\ChatbotController;
 use App\Events\MessageSent;
 use Illuminate\Http\Request;
@@ -110,6 +111,13 @@ Route::post('/chat/mark-seen', [ChatController::class, 'markSeen'])->name('chat.
 Route::middleware(['web', 'auth:web,admin'])->prefix('superadmin')->as('superadmin.')->group(function(){
     Route::get('/profile', [ProfileController::class, 'index'])->name('profile');
     Route::post('/profile', [ProfileController::class, 'update'])->name('profile.update');
+});
+
+// Cleared Expenses listing (saves PDFs under storage/public/marketing_expenses/in_account)
+Route::middleware(['web','multi_auth:web,admin'])->prefix('superadmin')->name('superadmin.')->group(function(){
+    Route::get('/accounts/cleared-expenses', [MarketingExpenseController::class, 'clearedExpenses'])
+        ->name('accounts.cleared_expenses')
+        ->middleware('permission:account.view');
 });
 
 // Delete chat message

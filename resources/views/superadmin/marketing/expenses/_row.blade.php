@@ -95,7 +95,7 @@
                 @elseif($expense->status === 'rejected')
                     <span class="badge bg-danger">Rejected</span>
                 @else
-                    <span class="badge bg-secondary">Pending</span>
+                    <span class="badge bg-warning text-dark">Pending</span>
                 @endif
             @endif
         @else
@@ -104,7 +104,7 @@
             @elseif($expense->status === 'rejected')
                 <span class="badge bg-danger">Rejected</span>
             @else
-                <span class="badge bg-secondary">Pending</span>
+                <span class="badge bg-warning text-dark">Pending</span>
             @endif
         @endif
     </td>

@@ -8,10 +8,13 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use App\Models\{User, MarketingExpense};
 use Carbon\Carbon;
+use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Str;
 use Barryvdh\DomPDF\Facade\Pdf;
+use Illuminate\Support\Facades\Log;
 use Maatwebsite\Excel\Facades\Excel;
 use App\Exports\MarketingExpensesExport;
+use Mpdf\Mpdf;
 
 class MarketingExpenseController extends Controller
 {
@@ -48,10 +51,10 @@ class MarketingExpenseController extends Controller
                 ->where('submitted_for_approval', true);
 
             $personalPending = $personalQuery->get();
-            $personalSummaries = $this->buildPersonalMonthlySummaries($personalPending);
 
+            // Show personal expenses individually in approvals (do not combine into summaries)
             $combined = $marketingExpenses
-                ->concat($personalSummaries)
+                ->concat($personalPending)
                 ->sortByDesc(function($expense){
                     $created = $expense->created_at ?? null;
                     if($created instanceof Carbon){
@@ -63,7 +66,6 @@ class MarketingExpenseController extends Controller
                     return 0;
                 })
                 ->values();
-
             $paginator = $this->paginateCollection($combined);
             $totals = $this->calculateTotals($marketingExpenses->concat($personalPending));
 
@@ -133,10 +135,27 @@ class MarketingExpenseController extends Controller
     {
         $status = $request->input('status', 'all');
 
-        $listing = $this->buildListingFromQuery(
-            $this->buildExportQuery($request, 'personal', $status),
-            true
-        );
+        $user = auth()->user();
+        // If no user is authenticated, show empty listing
+        if (!$user) {
+            return view('superadmin.personal.expenses.index', [
+                'expenses' => collect(),
+                'approvedRejected' => collect(),
+                'totals' => ['total_expenses' => 0, 'approved' => 0],
+                'status' => $status,
+                'section' => 'personal',
+                'dailyExpenses' => collect(),
+            ]);
+        }
+
+        // Build base query for the logged-in user's personal expenses
+        $baseQuery = $this->buildExportQuery($request, 'personal', $status)
+            ->where(function($q) use ($user){
+                $q->where('marketing_person_code', $user->user_code)
+                  ->orWhere('person_name', $user->name);
+            });
+
+        $listing = $this->buildListingFromQuery($baseQuery, true);
 
         $monthFilter = $request->input('month');
         $yearFilter  = $request->input('year');
@@ -144,12 +163,18 @@ class MarketingExpenseController extends Controller
         $targetMonth = $monthFilter ? (int) $monthFilter : (int) $today->format('n');
         $targetYear  = $yearFilter ? (int) $yearFilter : (int) $today->format('Y');
 
-        $dailyExpenses = MarketingExpense::where('section', 'personal')
-            ->where('status', 'pending')
+        // Keep personal expenses (pending, approved and rejected) in the daily uploads table
+        $dailyExpensesQuery = MarketingExpense::where('section', 'personal')
+            ->whereIn('status', ['pending', 'approved', 'rejected'])
             ->whereYear('created_at', $targetYear)
             ->whereMonth('created_at', $targetMonth)
-            ->orderByDesc('created_at')
-            ->get();
+            ->where(function($q) use ($user){
+                $q->where('marketing_person_code', $user->user_code)
+                  ->orWhere('person_name', $user->name);
+            })
+            ->orderByDesc('created_at');
+
+        $dailyExpenses = $dailyExpensesQuery->get();
 
         if($search = $request->input('search')){
             $dailyExpenses = $dailyExpenses->filter(function($expense) use ($search){
@@ -160,12 +185,148 @@ class MarketingExpenseController extends Controller
             })->values();
         }
 
+        // Also prepare a paginator of approved/rejected personal expenses for the "Approved & Rejected" table
+        // Exclude personal items that are part of submitted_for_approval summaries
+        // to keep approved personal expenses visible in the daily uploads table.
+        $approvedRejectedQuery = $this->buildExportQuery($request, 'personal')
+            ->where(function($q) use ($user){
+                $q->where('marketing_person_code', $user->user_code)
+                  ->orWhere('person_name', $user->name);
+            })
+            ->whereIn('status', ['approved', 'rejected'])
+            ->where(function($q){
+                $q->where('submitted_for_approval', false)
+                  ->orWhereNull('submitted_for_approval');
+            });
+
+        // Use same per-page as main listing if available, otherwise default to 15
+        $defaultPerPage = method_exists($listing['expenses'], 'perPage') ? $listing['expenses']->perPage() : 15;
+        $perPage = (int) ($request->input('approved_per_page') ?? $defaultPerPage);
+        $approvedRejected = $approvedRejectedQuery->paginate($perPage)->withQueryString();
+
+        // Build 'Checked In' items from saved cleared PDFs that belong to this user
+        $base = 'marketing_expenses/in_account';
+        $files = Storage::disk('public')->exists($base) ? Storage::disk('public')->files($base) : [];
+        $checkedIn = collect($files)->filter(function($f){ return str_ends_with($f, '.pdf'); })->map(function($path){
+            $metaPath = $path . '.json';
+            $meta = null;
+            if (Storage::disk('public')->exists($metaPath)){
+                try { $meta = json_decode(Storage::disk('public')->get($metaPath), true); } catch (\Throwable $e) { $meta = null; }
+            }
+            return [
+                'path' => $path,
+                'url' => asset('storage/' . $path),
+                'filename' => basename($path),
+                'meta' => $meta,
+            ];
+        })->values();
+
+        // Filter checkedIn for this user (match marketing_person_code in meta.filters or person_name/person_code in meta)
+        $checkedIn = $checkedIn->filter(function($it) use ($user){
+            $meta = $it['meta'] ?? [];
+            // Skip checked-in items that were marked as global exports
+            if (!empty($meta['hide_from_personal'])) return false;
+            $filters = $meta['filters'] ?? [];
+
+            // 1) Check explicit query filter saved
+            $mp = $filters['marketing_person_code'] ?? null;
+            if ($mp && (string)$mp === (string)$user->user_code) return true;
+
+            // 2) Check explicit arrays of person codes/names saved in metadata
+            $personCodes = $meta['person_codes'] ?? [];
+            $personNames = $meta['person_names'] ?? [];
+            if (!empty($personCodes) && in_array((string)$user->user_code, array_map('strval', $personCodes), true)) return true;
+            foreach ($personNames as $pn) {
+                if (!empty($pn) && stripos($pn, $user->name) !== false) return true;
+            }
+
+            // 3) Check explicit single person fields
+            $personCode = $meta['person_code'] ?? null;
+            $personName = $meta['person_name'] ?? null;
+            if ($personCode && (string)$personCode === (string)$user->user_code) return true;
+            if ($personName && stripos($personName, $user->name) !== false) return true;
+
+                // 4) If expense_ids exist, load those expenses and check ownership
+            if (!empty($meta['expense_ids']) && is_array($meta['expense_ids'])){
+                $ids = array_map('intval', $meta['expense_ids']);
+                $match = \App\Models\MarketingExpense::whereIn('id', $ids)
+                    ->where(function($q) use ($user){
+                        $q->where('marketing_person_code', $user->user_code)
+                          ->orWhere('person_name', 'like', "%{$user->name}%");
+                    })->exists();
+                if ($match) return true;
+            }
+
+            // 5) Fallback: check filename contains user code or name
+            $filename = $it['filename'] ?? '';
+            if ($filename && (stripos($filename, $user->user_code) !== false || stripos($filename, $user->name) !== false)) return true;
+
+            return false;
+        })->values();
+
+        // Remove approved daily expenses that were already cleared (match month/year & person code if available in metadata)
+        $dailyExpenses = $dailyExpenses->reject(function($expense) use ($checkedIn){
+            if($expense->status !== 'approved') return false;
+            foreach($checkedIn as $it){
+                $meta = $it['meta'] ?? [];
+                // Do not remove daily expenses for global exports
+                if (!empty($meta['hide_from_personal'])) continue;
+                // If metadata contains explicit expense_ids, remove those exact expenses
+                if(!empty($meta['expense_ids']) && is_array($meta['expense_ids'])){
+                    if(in_array((int)$expense->id, array_map('intval', $meta['expense_ids']))) return true;
+                }
+
+                $filters = $meta['filters'] ?? [];
+                if(!empty($filters['month']) && !empty($filters['year'])){
+                    $m = (int)$filters['month'];
+                    $y = (int)$filters['year'];
+                    if($expense->created_at && ((int)$expense->created_at->format('n') === $m) && ((int)$expense->created_at->format('Y') === $y)){
+                        // If metadata has marketing_person_code, ensure it matches expense
+                        if(!empty($filters['marketing_person_code'])){
+                            if((string)$filters['marketing_person_code'] === (string)$expense->marketing_person_code) return true;
+                        } else {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        })->values();
+
+        // Ensure checkedIn items have approver_name resolved for display
+        $checkedIn = $checkedIn->map(function($it){
+            $meta = $it['meta'] ?? [];
+            $approverName = $meta['approver_name'] ?? null;
+            if (empty($approverName) && !empty($meta['approver_id'])){
+                $approver = \App\Models\Admin::find($meta['approver_id']) ?? \App\Models\User::find($meta['approver_id']);
+                $approverName = $approver?->name ?? null;
+            }
+            $meta['approver_name'] = $approverName;
+            $it['meta'] = $meta;
+            return $it;
+        })->values();
+
+        // Paginate checkedIn items for personal view
+        $checkedInPerPage = (int) ($request->input('checkedin_per_page') ?? 15);
+        $checkedInPage = (int) ($request->input('checkedin_page') ?? 1);
+        $checkedInPaginator = new LengthAwarePaginator(
+            collect($checkedIn)->forPage($checkedInPage, $checkedInPerPage),
+            collect($checkedIn)->count(),
+            $checkedInPerPage,
+            $checkedInPage,
+            ['path' => request()->url(), 'query' => request()->query()]
+        );
+
         return view('superadmin.personal.expenses.index', [
             'expenses'       => $listing['expenses'],
+            'approvedRejected'=> $approvedRejected,
             'totals'         => $listing['totals'],
             'status'         => $status,
             'section'        => 'personal',
             'dailyExpenses'  => $dailyExpenses,
+            'checkedIn'      => $checkedInPaginator,
+            'selected_checkedin_per_page' => $checkedInPerPage,
+            'selected_approved_per_page' => $perPage,
         ]);
     }
 
@@ -226,16 +387,337 @@ class MarketingExpenseController extends Controller
         return $pdf->download($filename);
     }
 
+    /**
+     * Download Approved Expenses (In Account) PDF with receipts appended.
+     */
+    public function inAccount(Request $request)
+    {
+        $section = $request->input('section', 'marketing');
+        if(!in_array($section, ['marketing','office','personal'])){ $section = 'marketing'; }
+
+        // Determine which approved subsection to use
+        $approvedSection = $request->input('approved_section');
+        if(!$approvedSection && $section === 'marketing'){
+            // on marketing page we show personal approved; default to personal
+            $approvedSection = 'personal';
+        }
+
+        $query = \App\Models\MarketingExpense::with(['marketingPerson','approver'])
+            ->where('status', 'approved')
+            ->when($approvedSection === 'personal', fn($q) => $q->where('section', 'personal'))
+            ->when($approvedSection === 'office', fn($q) => $q->where('section', 'office'))
+            ->when($approvedSection === 'marketing', fn($q) => $q->where('section', 'marketing'));
+
+        if($mp = $request->input('marketing_person_code')){
+            $query->where(function($inner) use ($mp){
+                $inner->where('marketing_person_code', $mp)
+                      ->orWhereHas('marketingPerson', function($m) use ($mp){
+                          $m->where('user_code', $mp)->orWhere('id', $mp);
+                      });
+            });
+        }
+
+        // Apply month/year/search if provided using existing helper buildExportQuery
+        // but since we already have a base query, apply year/month/search manually
+        if($year = $request->input('year')){ $query->whereYear('created_at', $year); }
+        if($month = $request->input('month')){ $query->whereMonth('created_at', $month); }
+        if($search = $request->input('search')){
+            $query->where(function($q) use ($search){
+                $q->whereHas('marketingPerson', function($sub) use ($search){
+                    $sub->where('name', 'like', "%{$search}%")->orWhere('user_code', 'like', "%{$search}%");
+                })->orWhere('person_name', 'like', "%{$search}%")->orWhere('marketing_person_code', 'like', "%{$search}%");
+            });
+        }
+
+        $expenses = $query->orderByDesc('created_at')->get();
+
+        $totals = [
+            'total_expenses' => $expenses->sum(fn($e) => (float)($e->amount ?? 0)),
+            'approved' => $expenses->sum(fn($e) => (float)(($e->approved_amount ?? 0) ?: $e->amount)),
+        ];
+
+            // Determine if all expenses belong to a single person (name)
+            $personNames = collect($expenses)->map(function($e){
+                if (isset($e->marketingPerson) && $e->marketingPerson) return $e->marketingPerson->name;
+                return $e->person_name ?? null;
+            })->filter()->unique()->values();
+
+            $personCodes = collect($expenses)->pluck('marketing_person_code')->filter()->unique()->values();
+
+            $singlePersonName = null;
+            $singlePersonCode = null;
+            if ($personNames->count() === 1) {
+                $singlePersonName = $personNames->first();
+                if ($personCodes->count() === 1) {
+                    $singlePersonCode = $personCodes->first();
+                }
+            }
+
+            // Render HTML for the table
+            $html = view('superadmin.marketing.expenses.in_account_pdf', [
+                'expenses' => $expenses,
+                'totals' => $totals,
+                'approvedSection' => $approvedSection,
+                'singlePersonName' => $singlePersonName,
+                'singlePersonCode' => $singlePersonCode,
+            ])->render();
+
+        $tempDir = storage_path('app/temp/mpdf');
+        if (!is_dir($tempDir)) { mkdir($tempDir, 0775, true); }
+
+        $mpdf = new Mpdf(['format' => 'A4', 'tempDir' => $tempDir]);
+        $mpdf->WriteHTML($html);
+
+        // Append receipts (images/pdf) collected from the expenses
+        $receiptPaths = collect($expenses)->pluck('file_path')->filter()->unique()->values();
+        foreach ($receiptPaths as $receiptPath) {
+            if (!\Illuminate\Support\Facades\Storage::disk('public')->exists($receiptPath)) { continue; }
+            try {
+                $absolutePath = \Illuminate\Support\Facades\Storage::disk('public')->path($receiptPath);
+                $extension = strtolower(pathinfo($absolutePath, PATHINFO_EXTENSION));
+                if ($extension === 'pdf') {
+                    $pageCount = $mpdf->SetSourceFile($absolutePath);
+                    for ($page = 1; $page <= $pageCount; $page++) {
+                        $template = $mpdf->ImportPage($page);
+                        $mpdf->AddPage();
+                        $mpdf->UseTemplate($template);
+                    }
+                    continue;
+                }
+                if (in_array($extension, ['jpg','jpeg','png','gif','bmp','webp'], true)) {
+                    $mpdf->AddPage();
+                    $type = $extension === 'jpg' ? 'jpeg' : $extension;
+                    $mpdf->Image($absolutePath, 10, 10, 190, 0, strtoupper($type));
+                }
+            } catch (\Throwable $th) {
+                // continue on any failure silently
+                continue;
+            }
+        }
+
+        // If the export contains multiple different person names, mark it clearly as a Global Expense
+        if ($personNames->count() > 1) {
+            $filename = sprintf('Global Expense-%s.pdf', now()->format('Ymd_His'));
+        } else {
+            $filename = sprintf('in-account-approved-%s.pdf', now()->format('Ymd_His'));
+        }
+
+        // Save generated PDF to storage so it can be listed in "Cleared Expenses"
+        $pdfOutput = $mpdf->Output('', 'S');
+        $storagePath = 'marketing_expenses/in_account/' . $filename;
+        try {
+            Storage::disk('public')->put($storagePath, $pdfOutput);
+
+            // Store a small metadata file alongside the PDF for listing purposes
+            $first = $expenses->first();
+            $personCodes = $expenses->pluck('marketing_person_code')->filter()->unique()->values()->all();
+            $personNames = $expenses->pluck('person_name')->filter()->unique()->values()->all();
+
+            // Determine if this export is a global/all export (no marketing_person_code filter)
+            $isGlobalExport = !$request->has('marketing_person_code') || empty($request->input('marketing_person_code'));
+
+            $metadata = [
+                'approved_section' => $approvedSection,
+                'approved_total'   => $totals['approved'] ?? ($totals['approved'] ?? 0),
+                'total_expenses'   => $totals['total_expenses'] ?? ($totals['total_expenses'] ?? 0),
+                'approver_id'      => optional(auth('admin')->user())->id ?? optional(auth('web')->user())->id,
+                'created_at'       => now()->toDateTimeString(),
+                'filters'          => request()->query(),
+                'person_codes'     => $personCodes,
+                'person_names'     => $personNames,
+                'person_name'      => $first?->person_name ?? null,
+                'person_code'      => $first?->marketing_person_code ?? null,
+            ];
+
+            // For non-global exports include explicit expense ids so personal pages can remove included items.
+            // Also, if the export contains multiple different person names, treat it as a global export
+            // and hide it from individual personal Checked In tables.
+            $isMultiPerson = is_array($personNames) && count($personNames) > 1;
+            if (!$isGlobalExport && !$isMultiPerson) {
+                $metadata['expense_ids'] = $expenses->pluck('id')->map(fn($i) => (int)$i)->values()->all();
+            } else {
+                // Mark global/multi-person exports so they are not shown in personal Checked In tables
+                $metadata['hide_from_personal'] = true;
+            }
+
+            Storage::disk('public')->put($storagePath . '.json', json_encode($metadata));
+        } catch (\Throwable $e) {
+            // if saving fails, continue to return the PDF directly
+            return response($mpdf->Output($filename, 'S'), 200)
+                ->header('Content-Type', 'application/pdf')
+                ->header('Content-Disposition', 'attachment; filename="' . $filename . '"');
+        }
+
+        // Return the saved PDF as download
+        $download = Storage::disk('public')->get($storagePath);
+        return response($download, 200)
+            ->header('Content-Type', 'application/pdf')
+            ->header('Content-Disposition', 'attachment; filename="' . $filename . '"');
+    }
+
+    /**
+     * Show list of cleared (In Account) PDFs saved when approver generated them.
+     */
+    public function clearedExpenses(Request $request)
+    {
+        $base = 'marketing_expenses/in_account';
+        $files = Storage::disk('public')->exists($base) ? Storage::disk('public')->files($base) : [];
+
+        $items = collect($files)->filter(function($f){ return str_ends_with($f, '.pdf'); })->map(function($path){
+            $metaPath = $path . '.json';
+            $meta = null;
+            if (Storage::disk('public')->exists($metaPath)) {
+                try { $meta = json_decode(Storage::disk('public')->get($metaPath), true); } catch (\Throwable $e) { $meta = null; }
+            }
+            // Build a URL that respects the current request base URL (works when app runs in a subdirectory)
+            $baseUrl = rtrim(request()->getBaseUrl(), '/');
+            $host = request()->getSchemeAndHttpHost();
+            $relative = $baseUrl ? $baseUrl . '/storage/' . $path : '/storage/' . $path;
+            $fullUrl = $host . $relative;
+            return [
+                'path' => $path,
+                'url'  => $fullUrl,
+                'filename' => basename($path),
+                'meta' => $meta,
+            ];
+        })->values();
+
+        // Resolve approver names where possible and compute a display name for each item
+        $items = $items->map(function($it){
+            $approverName = $it['meta']['approver_name'] ?? null;
+            // If approver_name is not present or looks like an ID, try resolving via models
+            if (empty($approverName) && !empty($it['meta']['approver_id'])){
+                $approver = \App\Models\Admin::find($it['meta']['approver_id']) ?? \App\Models\User::find($it['meta']['approver_id']);
+                $approverName = $approver?->name ?? null;
+            }
+            // If approver_name exists but it's numeric (accidentally an id), try to resolve it too
+            if (empty($approverName) && !empty($it['meta']['approver_name']) && is_numeric($it['meta']['approver_name'])){
+                $ap = \App\Models\Admin::find($it['meta']['approver_name']) ?? \App\Models\User::find($it['meta']['approver_name']);
+                $approverName = $ap?->name ?? $it['meta']['approver_name'];
+            }
+
+            $meta = $it['meta'] ?? [];
+            $personNames = $meta['person_names'] ?? [];
+            // Determine display name: if export was marked hide_from_personal, or contains multiple person names,
+            // or filename indicates Global Expense, show a neutral label so it isn't attributed to a single person.
+            $displayName = null;
+            if (!empty($meta['hide_from_personal']) || (is_array($personNames) && count($personNames) > 1) || stripos($it['filename'] ?? '', 'Global Expense') !== false) {
+                $displayName = 'Global Expense';
+            } else {
+                $displayName = $meta['person_name'] ?? (is_array($personNames) && !empty($personNames[0]) ? $personNames[0] : null);
+            }
+
+            return array_merge($it, [
+                'approver_name' => $approverName,
+                'approved_total' => $it['meta']['approved_total'] ?? ($it['meta']['total_expenses'] ?? 0),
+                'approved_section' => $it['meta']['approved_section'] ?? null,
+                'created_at' => $it['meta']['created_at'] ?? null,
+                'display_name' => $displayName,
+            ]);
+        });
+
+        // Apply filters from request. Metadata stores 'filters' with keys such as marketing_person_code, month, year.
+        $filterPerson = $request->input('marketing_person_code');
+        $filterMonth = $request->input('month');
+        $filterYear  = $request->input('year');
+
+        $filtered = $items->filter(function($it) use ($filterPerson, $filterMonth, $filterYear){
+            $meta = $it['meta'] ?? [];
+            $metaFilters = $meta['filters'] ?? [];
+
+            // Person filter: allow matching against saved filter code, stored person_code, or person_name (substring)
+            if ($filterPerson) {
+                $mp = $metaFilters['marketing_person_code'] ?? null;
+                $personCode = $meta['person_code'] ?? null;
+                $personName = $meta['person_name'] ?? null;
+                $matched = false;
+                foreach ([$mp, $personCode, $personName] as $candidate) {
+                    if (empty($candidate)) continue;
+                    if ((string)$candidate === (string)$filterPerson) { $matched = true; break; }
+                    if (stripos((string)$candidate, (string)$filterPerson) !== false) { $matched = true; break; }
+                }
+                if (!$matched) return false;
+            }
+
+            // Month/year filter: prefer explicit saved filters, fallback to created_at metadata
+            $metaMonth = $metaFilters['month'] ?? null;
+            $metaYear  = $metaFilters['year'] ?? null;
+            $createdAt = $meta['created_at'] ?? null;
+
+            if ($filterMonth) {
+                if ($metaMonth !== null) {
+                    if ((int)$metaMonth !== (int)$filterMonth) return false;
+                } elseif ($createdAt) {
+                    try {
+                        $dt = \Carbon\Carbon::parse($createdAt);
+                        if ($dt->month !== (int)$filterMonth) return false;
+                    } catch (\Throwable $e) {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+            }
+
+            if ($filterYear) {
+                if ($metaYear !== null) {
+                    if ((int)$metaYear !== (int)$filterYear) return false;
+                } elseif ($createdAt) {
+                    try {
+                        $dt = \Carbon\Carbon::parse($createdAt);
+                        if ($dt->year !== (int)$filterYear) return false;
+                    } catch (\Throwable $e) {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+            }
+
+            return true;
+        })->values();
+
+        // Sort filtered items by most recent generated time (created_at in metadata) desc
+        $filtered = $filtered->sortByDesc(function($it){
+            $dt = $it['created_at'] ?? ($it['meta']['created_at'] ?? null);
+            try { return $dt ? \Carbon\Carbon::parse($dt)->timestamp : 0; } catch (\Throwable $e) { return 0; }
+        })->values();
+
+        // Paginate cleared items
+        $clearedPerPage = (int) ($request->input('cleared_per_page') ?? 15);
+        $clearedPage = (int) ($request->input('page') ?? 1);
+        $clearedPaginator = new LengthAwarePaginator(
+            $filtered->forPage($clearedPage, $clearedPerPage),
+            $filtered->count(),
+            $clearedPerPage,
+            $clearedPage,
+            ['path' => request()->url(), 'query' => request()->query()]
+        );
+
+        // Prepare list of marketing persons for the filter dropdown
+        $persons = User::orderBy('name')->get(['name','user_code']);
+
+        return view('superadmin.accounts.cleared_expenses', [
+            'items' => $clearedPaginator,
+            'persons' => $persons,
+            'selected_person' => $filterPerson,
+            'selected_month' => $filterMonth,
+            'selected_year' => $filterYear,
+            'selected_cleared_per_page' => $clearedPerPage,
+        ]);
+    }
+
     public function updatePersonal(Request $request, MarketingExpense $expense)
     {
         if($expense->section !== 'personal'){
             abort(403, 'Only personal expenses can be updated through this endpoint.');
         }
 
-        if($expense->status !== 'pending'){
+        // Allow updates for pending and rejected expenses; disallow only approved ones
+        if(!in_array($expense->status, ['pending', 'rejected'], true)){
             return response()->json([
                 'success' => false,
-                'message' => 'Approved or rejected expenses cannot be modified.',
+                'message' => 'Approved expenses cannot be modified.',
             ], 422);
         }
 
@@ -249,6 +731,7 @@ class MarketingExpenseController extends Controller
 
         $previousAmount   = (float) $expense->amount;
         $previousApproved = (float) $expense->approved_amount;
+        $wasRejected = ($expense->status === 'rejected');
         $previousDue      = max(0, $previousAmount - $previousApproved);
 
         $updatePayload = [
@@ -267,38 +750,48 @@ class MarketingExpenseController extends Controller
 
         $expense->update($updatePayload);
 
+        // If this expense was previously rejected and is now edited, treat it as a new upload:
+        // - reset approval fields, mark as pending, and resubmit for approval
+        if ($wasRejected) {
+            $expense->update([
+                'status' => 'pending',
+                'approved_amount' => 0,
+                'approved_by' => null,
+                'approved_at' => null,
+                'approval_note' => null,
+                'submitted_for_approval' => true,
+                'created_at' => now()->toDateTimeString(),
+            ]);
+        }
+
         if((float) $expense->approved_amount > (float) $expense->amount){
             $expense->update(['approved_amount' => $expense->amount]);
         }
 
         $expense->refresh()->load(['marketingPerson','approver']);
 
-        $summaryExpense = null;
-        if($expense->submitted_for_approval){
-            $summaryExpense = $this->refreshPersonalSummaryForExpense($expense);
-            $expense->refresh()->load(['marketingPerson','approver']);
-        }
-
-        $rowHtml = null;
-        if($summaryExpense){
-            $rowHtml = view('superadmin.marketing.expenses._row', [
-                'expense' => $summaryExpense,
-                'isApprovalPage' => false,
-                'showPerson' => false,
-            ])->render();
-        } else {
-            $rowHtml = view('superadmin.marketing.expenses._row', [
-                'expense' => $expense,
-                'isApprovalPage' => false,
-                'showPerson' => false,
-            ])->render();
-        }
+        // Render the updated expense row directly — do not consolidate into a summary.
+        $rowHtml = view('superadmin.marketing.expenses._row', [
+            'expense' => $expense,
+            'isApprovalPage' => false,
+            'showPerson' => false,
+        ])->render();
 
         $dailyRowHtml = view('superadmin.personal.expenses._daily_row', ['expense' => $expense])->render();
 
         $currentAmount   = (float) $expense->amount;
         $currentApproved = (float) $expense->approved_amount;
         $currentDue      = max(0, $currentAmount - $currentApproved);
+
+        // Refresh or rebuild any personal summary that this expense belongs to
+        $summaryExpense = null;
+        try {
+            if (method_exists($this, 'refreshPersonalSummaryForExpense')) {
+                $summaryExpense = $this->refreshPersonalSummaryForExpense($expense);
+            }
+        } catch (\Throwable $e) {
+            $summaryExpense = null;
+        }
 
         $summaryExpenseId = $summaryExpense?->id;
         $summaryGroupIds = $summaryExpense ? (array) ($summaryExpense->aggregate_ids ?? []) : [];
@@ -326,10 +819,11 @@ class MarketingExpenseController extends Controller
             abort(403, 'Only personal expenses can be deleted through this endpoint.');
         }
 
-        if($expense->status !== 'pending'){
+        // Allow deletion for pending and rejected expenses; disallow only approved ones
+        if(!in_array($expense->status, ['pending', 'rejected'], true)){
             return response()->json([
                 'success' => false,
-                'message' => 'Approved or rejected expenses cannot be deleted.',
+                'message' => 'Approved expenses cannot be deleted.',
             ], 422);
         }
 
@@ -443,7 +937,8 @@ class MarketingExpenseController extends Controller
             'file_path'             => $path,
             'description'           => $data['description'] ?? null,
             'status'                => 'pending',
-            'submitted_for_approval'=> false,
+            // Auto-submit when uploading personal expenses so they appear in Approvals
+            'submitted_for_approval'=> $section === 'personal',
         ]);
 
         $expense->load('marketingPerson');
@@ -453,6 +948,8 @@ class MarketingExpenseController extends Controller
         if($section === 'personal'){
             $dailyRowHtml = view('superadmin.personal.expenses._daily_row', ['expense' => $expense])->render();
 
+            // If auto-submitted, render the individual expense row so it appears
+            // in Approvals as a separate item (do not create/refresh grouped summary).
             if($expense->submitted_for_approval){
                 $rowHtml = view('superadmin.marketing.expenses._row', [
                     'expense' => $expense,

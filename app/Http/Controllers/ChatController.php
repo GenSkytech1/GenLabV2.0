@@ -5,238 +5,161 @@ namespace App\Http\Controllers;
 use App\Models\ChatGroup;
 use App\Models\ChatMessage;
 use App\Models\ChatReaction;
-use App\Models\ChatGroupMember;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
-use App\Models\User;
-use Illuminate\Support\Facades\File;
-use App\Events\MessageSent;
 
 class ChatController extends Controller
 {
-    // NEW: helpers to safely access optional guards (e.g., 'superadmin')
-    protected function guardAvailable(string $name): bool
-    {
-        return (bool) config("auth.guards.$name");
-    }
-    protected function guardUser(string $name)
-    {
-        return $this->guardAvailable($name) ? auth($name)->user() : null;
-    }
-    protected function guardCheck(string $name): bool
-    {
-        return $this->guardAvailable($name) ? auth($name)->check() : false;
-    }
-
     protected function user()
     {
-        // Prefer superadmin, then admin/api_admin, then api, then web
-        return $this->guardUser('superadmin')
-            ?: $this->guardUser('admin')
-            ?: $this->guardUser('api_admin')
-            ?: $this->guardUser('api')
-            ?: $this->guardUser('web');
-    }
-
-    protected function currentGuard(): ?string
-    {
-        // Treat superadmin/admin/api_admin as 'admin'. Regular users (web/api) as 'web'.
-        if ($this->guardCheck('superadmin') || $this->guardCheck('admin') || $this->guardCheck('api_admin')) return 'admin';
-        if ($this->guardCheck('api') || $this->guardCheck('web')) return 'web';
-        return null;
-    }
-
-    // Root admin = either real superadmin (if guard exists) or real admin
-    protected function isRootAdmin(): bool
-    {
-        return $this->guardCheck('superadmin') || $this->guardCheck('admin') || $this->guardCheck('api_admin');
-    }
-
-    // NEW: helper to check if a web user is chat admin via users.is_chat_admin
-    protected function userIsChatAdmin(?User $u): bool
-    {
-        if (!$u) return false;
-        if (!Schema::hasColumn('users', 'is_chat_admin')) return false;
-        try { return (bool) $u->is_chat_admin; } catch (\Throwable $e) { return false; }
-    }
-
-    protected function isSuperAdmin(): bool
-    {
-        // Root admin OR a web user flagged as chat admin
-        if ($this->isRootAdmin()) return true;
-        if ($this->guardCheck('web')) return $this->userIsChatAdmin(auth('web')->user());
-        if ($this->guardCheck('api')) return $this->userIsChatAdmin(auth('api')->user());
-        return false;
-    }
-
-    // NEW: copy storage/app/public/<relative> to public/storage/<relative> if not present
-    protected function ensurePublicCopy(string $relative): void
-    {
-        $relative = ltrim($relative, '/');
-        $src = storage_path('app/public/' . $relative);
-        $dst = public_path('storage/' . $relative);
-        try {
-            if (is_file($src) && !is_file($dst)) {
-                $dir = dirname($dst);
-                if (!File::exists($dir)) {
-                    File::makeDirectory($dir, 0755, true);
-                }
-                @File::copy($src, $dst);
-            }
-        } catch (\Throwable $e) {
-            // ignore
-        }
-    }
-
-    // Generate an avatar URL for a user based on stored profile pics or model fields; fallback to placeholder
-    protected function avatarUrl(?User $u): ?string
-    {
-        if (!$u) return null;
-        // 1) Check uploaded avatar under storage/app/public/avatars/{id}.{ext}
-        foreach (['jpg','jpeg','png','webp'] as $ext) {
-            $path = "avatars/{$u->id}.{$ext}";
-            if (Storage::disk('public')->exists($path)) {
-                // NEW: make sure it's reachable without symlink
-                $this->ensurePublicCopy($path);
-                return url('storage/' . $path);
-            }
-        }
-        // 2) Fallback to model-provided URLs if present
-        $candidates = [
-            $u->profile_photo_url ?? null,
-            $u->avatar ?? null,
-            $u->photo ?? null,
-        ];
-        foreach ($candidates as $url) {
-            if (is_string($url) && trim($url) !== '') return $url;
-        }
-        // 3) Final fallback to a local placeholder asset
-        return url('assets/img/profiles/avator1.jpg');
+        return auth('web')->user() ?: auth('admin')->user();
     }
 
     public function groups()
     {
-        $u = $this->user();
-        // IMPORTANT: only real admins get admin inbox behavior for list shape (dm2 rejected)
-        $isRoot = $this->isRootAdmin();
-
         // Ensure default groups exist
         $defaults = ['Bookings','Reports','Invoices','Management','Amendment Reports'];
         foreach ($defaults as $name) {
             ChatGroup::firstOrCreate(['slug' => Str::slug($name)], ['name' => $name]);
         }
+        return ChatGroup::orderBy('id')->get(['id','name'])->values();
+    }
 
-        $list = ChatGroup::orderBy('id')->get(['id','name','slug']);
-        if ($isRoot) {
-            $list = $list->reject(function($g){ return Str::startsWith($g->slug, 'dm2-'); });
-        } else {
-            $uid = (int) ($u->id ?? 0);
-            $list = $list->filter(function($g) use ($uid){
-                if (!Str::startsWith($g->slug, 'dm')) return true; // public groups
-                if ($g->slug === ('dm-'.$uid)) return true; // admin<->me
-                if (Str::startsWith($g->slug, 'dm2-')){
-                    $parts = explode('-', $g->slug); $a=(int)($parts[1]??0); $b=(int)($parts[2]??0);
-                    return $a===$uid || $b===$uid; // only my dm2
-                }
-                return false;
+    public function messages(Request $request)
+    {
+        $request->validate(['group_id' => 'required|integer|exists:chat_groups,id']);
+        $user = $this->user();
+        $list = ChatMessage::with(['user:id,name', 'reactions.user:id,name'])
+            ->where('group_id', $request->integer('group_id'))
+            ->orderBy('id')
+            ->limit(200)
+            ->get()
+            ->map(function(ChatMessage $m) use ($user) {
+                return $this->serializeMessage($m, $user);
             });
+        return response()->json($list);
+    }
+
+    public function messagesSince(Request $request)
+    {
+        $request->validate(['group_id' => 'required|integer|exists:chat_groups,id', 'after_id' => 'required|integer']);
+        $user = $this->user();
+        $list = ChatMessage::with(['user:id,name', 'reactions.user:id,name'])
+            ->where('group_id', $request->integer('group_id'))
+            ->where('id', '>', $request->integer('after_id'))
+            ->orderBy('id')
+            ->limit(200)
+            ->get()
+            ->map(function(ChatMessage $m) use ($user) {
+                return $this->serializeMessage($m, $user);
+            });
+        return response()->json($list);
+    }
+
+    public function send(Request $request)
+    {
+        $user = $this->user();
+        if (!$user) return response()->json(['message' => 'Unauthorized'], 401);
+
+        $request->validate([
+            'group_id' => 'required|integer|exists:chat_groups,id',
+            'type' => 'required|string|in:text,image,pdf,voice',
+            'content' => 'nullable|string|max:5000',
+            'message' => 'nullable|string|max:5000',
+            'body' => 'nullable|string|max:5000',
+            'text' => 'nullable|string|max:5000',
+            'description' => 'nullable|string|max:5000',
+            'file' => 'nullable|file|max:10240', // 10MB
+        ]);
+
+        $type = (string) $request->string('type');
+        // Gather text from any alias
+        $contentAliases = [
+            $request->input('content'),
+            $request->input('message'),
+            $request->input('body'),
+            $request->input('text'),
+            $request->input('description'),
+        ];
+        $firstNonEmpty = null;
+        foreach ($contentAliases as $v){ if (is_string($v) && trim($v) !== '') { $firstNonEmpty = trim($v); break; } }
+
+        $filePath = null; $original = null;
+
+        if (in_array($type, ['image','pdf','voice'])) {
+            $request->validate([
+                'file' => [
+                    'required','file','max:20480',
+                    function ($attr, $value, $fail) use ($type) {
+                        $mime = $value->getMimeType();
+                        if ($type === 'image' && !str_starts_with($mime, 'image/')) $fail('Invalid image file');
+                        if ($type === 'pdf' && $mime !== 'application/pdf') $fail('Invalid PDF file');
+                        if ($type === 'voice' && !str_starts_with($mime, 'audio/')) $fail('Invalid audio file');
+                    }
+                ]
+            ]);
+            $original = $request->file('file')->getClientOriginalName();
+            $filePath = $request->file('file')->store('public/chat/'.$request->integer('group_id'));
+        } else if ($type === 'text') {
+            if ($firstNonEmpty === null) {
+                return response()->json(['message' => 'Text content is required'], 422);
+            }
         }
-        if ($u) {
-            $dm = ChatGroup::where('slug', 'dm-' . (int)$u->id)->first();
-            if ($dm && !$list->contains('id', $dm->id)) { $list->push($dm); }
+
+        $msg = ChatMessage::create([
+            'group_id' => $request->integer('group_id'),
+            'user_id' => $user->id,
+            'type' => $type,
+            'content' => $type === 'text' ? $firstNonEmpty : null,
+            'file_path' => $filePath,
+            'original_name' => $original,
+        ]);
+
+        $msg->load('user:id,name');
+        return response()->json($this->serializeMessage($msg, $user), 201);
+    }
+
+    public function react(Request $request, ChatMessage $message)
+    {
+        $user = $this->user();
+        if (!$user) return response()->json(['message' => 'Unauthorized'], 401);
+        $request->validate(['type' => 'required|string|max:32']);
+        ChatReaction::updateOrCreate([
+            'message_id' => $message->id,
+            'user_id' => $user->id,
+        ], [
+            'type' => $request->string('type')
+        ]);
+        return response()->json(['status' => 'ok']);
+    }
+
+    protected function serializeMessage(ChatMessage $m, $viewer)
+    {
+        $fileUrl = $m->file_path ? Storage::url($m->file_path) : null;
+        $data = [
+            'id' => $m->id,
+            'group_id' => $m->group_id,
+            'user' => $m->relationLoaded('user') && $m->user ? [ 'id' => $m->user->id, 'name' => $m->user->name ] : null,
+            'type' => $m->type,
+            'content' => $m->content,
+            'file_url' => $fileUrl,
+            'original_name' => $m->original_name,
+            'created_at' => $m->created_at?->toISOString(),
+        ];
+        // Reactions visible only to the message sender (owner)
+        if ($viewer && $viewer->id === $m->user_id) {
+            $data['reactions'] = $m->relationLoaded('reactions') ? $m->reactions->map(function(ChatReaction $r){
+                return [ 'type' => $r->type, 'user_id' => $r->user_id, 'user' => $r->relationLoaded('user') && $r->user ? [ 'id'=>$r->user->id, 'name'=>$r->user->name ] : null ];
+            })->values() : [];
+        } else {
+            $data['reactions'] = [];
         }
+        return $data;
+    }
+}
 
-        $uid = (int) ($u->id ?? 0);
-        $result = [];
-        foreach ($list as $g) {
-            $displayName = $g->name;
-            $groupAvatar = null;
-            if ($u){
-                if (!$isRoot && $g->slug === ('dm-' . $uid)) {
-                    $displayName = 'Super Admin';
-                    // Optional: you can set a static admin avatar here if available
-                }
-                if (Str::startsWith($g->slug, 'dm2-')){
-                    $parts = explode('-', $g->slug); $a=(int)($parts[1]??0); $b=(int)($parts[2]??0);
-                    $peerId = $a === $uid ? $b : ($b === $uid ? $a : null);
-                    if ($peerId){ $peer = User::find($peerId); if ($peer){ $displayName = $peer->name ?: ('User '.$peerId); $groupAvatar = $this->avatarUrl($peer); } }
-                } elseif (preg_match('/^dm-(\d+)$/', $g->slug, $m)) {
-                    $target = User::find((int)$m[1]); if ($target) { $groupAvatar = $this->avatarUrl($target); }
-                }
-            } else {
-                // Not authenticated, still try dm-<id>
-                if (preg_match('/^dm-(\d+)$/', $g->slug, $m)) {
-                    $target = User::find((int)$m[1]); if ($target) { $groupAvatar = $this->avatarUrl($target); }
-                }
-            }
-
-            $base = ChatMessage::where('group_id', $g->id);
-
-            // Per-group elevation: root OR (chat-admin and bookings group)
-            $isElevated = $isRoot || ($this->isChatAdminOnly() && strtolower($g->slug) === 'bookings');
-
-            if ($isElevated) {
-                $base->where(function($w){ $w->whereNull('sender_guard')->orWhere('sender_guard','!=','admin'); });
-            } else {
-                // ...existing non-admin base restrictions...
-                $slug = $g->slug;
-                $isUsersDM = $slug === ('dm-' . $uid);
-                $isDM2 = \Illuminate\Support\Str::startsWith($slug, 'dm2-') && preg_match('/^dm2-(\d+)-(\d+)$/', $slug, $m) && ((int)$m[1] === $uid || (int)$m[2] === $uid);
-                if ($isUsersDM) {
-                    $base->where('sender_guard', 'admin');
-                } elseif ($isDM2) {
-                    $base->where('user_id', '!=', $uid);
-                } else {
-                    $base->where('sender_guard', 'admin')
-                         ->whereIn('reply_to_message_id', function($sq) use ($uid){
-                             $sq->select('id')->from('chat_messages')->where('user_id', $uid);
-                         });
-                }
-            }
-
-            $latest = (clone $base)->with('user:id,name')
-                                   ->orderBy('id','desc')->first();
-
-            // Unread: compute against "other side" after last seen, with fallback when no membership exists
-            $mem = ChatGroupMember::where('group_id', $g->id)->where('user_id', $uid)->first();
-            $lastIdInGroup = (int) (ChatMessage::where('group_id', $g->id)->max('id') ?? 0);
-            $lastSeen = $mem && (int)($mem->last_seen_id ?? 0) > 0 ? (int)$mem->last_seen_id : $lastIdInGroup;
-
-            $unreadQ = ChatMessage::where('group_id', $g->id)->where('id', '>', $lastSeen);
-            if ($isElevated) {
-                // Admin-like unread for elevated scope
-                $unreadQ->where(function($w){ $w->whereNull('sender_guard')->orWhere('sender_guard','!=','admin'); });
-            } else {
-                // ...existing non-admin unread rules...
-                $slug = $g->slug;
-                $isUsersDM = $slug === ('dm-' . $uid);
-                $isDM2 = \Illuminate\Support\Str::startsWith($slug, 'dm2-') && preg_match('/^dm2-(\d+)-(\d+)$/', $slug, $m) && ((int)$m[1] === $uid || (int)$m[2] === $uid);
-                if ($isUsersDM) {
-                    $unreadQ->where('sender_guard', 'admin');
-                } elseif ($isDM2) {
-                    $unreadQ->where('user_id', '!=', $uid);
-                } else {
-                    $unreadQ->where('sender_guard', 'admin')
-                            ->whereIn('reply_to_message_id', function($sq) use ($uid){
-                                $sq->select('id')->from('chat_messages')->where('user_id', $uid);
-                            });
-                }
-            }
-            $unread = (int) $unreadQ->count();
-
-            $result[] = [
-                'id' => $g->id,
-                'name' => $displayName,
-                'avatar' => $groupAvatar,
-                'latest' => $latest ? [
-                    'id' => $latest->id,
-                    'type' => $latest->type,
-                    'content' => $latest->content,
-                    'original_name' => $latest->original_name,
-                    'sender_guard' => $latest->sender_guard,
                     'sender_name' => $latest->sender_name,
                     'user' => ($latest->relationLoaded('user') && $latest->user) ? ['id'=>$latest->user->id, 'name'=>$latest->user->name] : null,
                     'created_at' => $latest->created_at?->toISOString(),

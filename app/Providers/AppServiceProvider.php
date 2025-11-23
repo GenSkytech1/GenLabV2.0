@@ -19,6 +19,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        $settings = null;
         try {
             $settings = \App\Models\SiteSetting::query()->first();
             $appSettings = [
