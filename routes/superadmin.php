@@ -52,6 +52,7 @@ use App\Http\Controllers\Accounts\CashLetterController;
 use App\Http\Controllers\Accounts\ChequeController;
 use App\Http\Controllers\Accounts\BankController;
 use App\Http\Controllers\Accounts\ChequeTemplateController;
+use App\Http\Controllers\Accounts\VoucherController;
 
 use App\Http\Controllers\Accounts\AccountsLetterController;
 use App\Http\Controllers\Accounts\PayrollReviewController;
@@ -327,6 +328,24 @@ Route::middleware(['multi_auth:web,admin'])->prefix('superadmin')->name('superad
         Route::get('cheques/{cheque}/print-preview', [ChequeController::class, 'printPreview'])->name('cheques.printPreview');
 
         Route::get('cash-letter/payments', [CashLetterController::class, 'showMultiple'])->name('cashLetter.payments.showMultiple');
+
+        // Vouchers - Generate & Approve
+        Route::prefix('vouchers')->name('vouchers.')->group(function () {
+            Route::get('create', [VoucherController::class, 'create'])->name('create');
+            Route::post('/', [VoucherController::class, 'store'])->name('store');
+            Route::get('/', [VoucherController::class, 'index'])->name('index');
+            Route::get('approve', [VoucherController::class, 'approveIndex'])->name('approve');
+            Route::get('export/pdf', [VoucherController::class, 'exportPdf'])->name('export.pdf');
+            Route::get('export/excel', [VoucherController::class, 'exportExcel'])->name('export.excel');
+            Route::patch('{voucher}/approve', [VoucherController::class, 'approve'])->name('approve.action');
+            Route::patch('{voucher}/reject', [VoucherController::class, 'reject'])->name('reject.action');
+            // Update payment status (paid/unpaid)
+            Route::patch('{voucher}/payment', [VoucherController::class, 'payment'])->name('payment');
+            Route::get('{voucher}/generate', [VoucherController::class, 'generate'])->name('generate');
+            Route::get('{voucher}/edit', [VoucherController::class, 'edit'])->name('edit');
+            Route::put('{voucher}', [VoucherController::class, 'update'])->name('update');
+            Route::delete('{voucher}', [VoucherController::class, 'destroy'])->name('destroy');
+        });
 
 
         // Bank Transactions
