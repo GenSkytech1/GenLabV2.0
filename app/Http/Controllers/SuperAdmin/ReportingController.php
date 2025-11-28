@@ -85,15 +85,16 @@ class ReportingController extends Controller
             // Aggregate by booking (reference_no) where at least one pending/overdue item
             $bookingQuery = \App\Models\NewBooking::query()->withCount(['items as pending_items_count' => function($q) use ($overdue, $today) {
                 if ($overdue) {
-                    $q->whereNull('issue_date')->whereNotNull('lab_expected_date')->whereDate('lab_expected_date', '<', $today);
+                    $q->whereNotNull('received_at')->whereNull('issue_date')->whereNotNull('lab_expected_date')->whereDate('lab_expected_date', '<', $today);
                 } else {
-                    $q->where(function($qq){ $qq->whereNull('received_at')->orWhereNull('issue_date'); });
+                    // Pendings are items that have been received but not yet issued
+                    $q->whereNotNull('received_at')->whereNull('issue_date');
                 }
             }])->with(['items' => function($q) use ($overdue, $today){
                 if ($overdue) {
-                    $q->whereNull('issue_date')->whereNotNull('lab_expected_date')->whereDate('lab_expected_date', '<', $today);
+                    $q->whereNotNull('received_at')->whereNull('issue_date')->whereNotNull('lab_expected_date')->whereDate('lab_expected_date', '<', $today);
                 } else {
-                    $q->where(function($qq){ $qq->whereNull('received_at')->orWhereNull('issue_date'); });
+                    $q->whereNotNull('received_at')->whereNull('issue_date');
                 }
             }]);
             if ($departmentId) { $bookingQuery->where('department_id', $departmentId); }
@@ -115,12 +116,13 @@ class ReportingController extends Controller
         } else {
             $q = BookingItem::query()->with(['booking']);
             if ($overdue) {
-                $q->whereNull('issue_date')
+                $q->whereNotNull('received_at')
+                  ->whereNull('issue_date')
                   ->whereNotNull('lab_expected_date')
                   ->whereDate('lab_expected_date','<', $today);
             } else {
-                // Pending items: either not received yet OR issue date not set
-                $q->where(function($qq){ $qq->whereNull('received_at')->orWhereNull('issue_date'); });
+                // Pending items: received but not yet issued
+                $q->whereNotNull('received_at')->whereNull('issue_date');
             }
             if ($departmentId) {
                 $q->whereHas('booking', function($b) use ($departmentId) { $b->where('department_id', $departmentId); });
@@ -158,12 +160,13 @@ class ReportingController extends Controller
 
         $q = BookingItem::query()->with(['booking']);
         if ($overdue) {
-            $q->whereNull('issue_date')
+            $q->whereNotNull('received_at')
+              ->whereNull('issue_date')
               ->whereNotNull('lab_expected_date')
               ->whereDate('lab_expected_date','<', $today);
         } else {
-            // Pending when not received OR issue date not set
-            $q->where(function($qq){ $qq->whereNull('received_at')->orWhereNull('issue_date'); });
+            // Pending when received but issue date not set
+            $q->whereNotNull('received_at')->whereNull('issue_date');
         }
         if ($departmentId) {
             $q->whereHas('booking', function($b) use ($departmentId) { $b->where('department_id', $departmentId); });
