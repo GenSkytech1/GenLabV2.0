@@ -18,6 +18,7 @@ Homestead.json
 /storage/framework/views
 /storage/framework/testing
 bootstrap/cache/*.php
+storage/app/firebase-key.json
 
 # Composer & npm debug
 composer.lock
