@@ -31,7 +31,8 @@ class BookingController extends Controller
     public function __construct(
         GetUserActiveDepartment $departmentService,
         FileUploadService $fileUploadService,  
-        BookingCardService $bookingCardService
+        BookingCardService $bookingCardService, 
+        FCMService $fcmService
     ) {
         $this->departmentService = $departmentService;
         $this->fileUploadService = $fileUploadService;
@@ -213,7 +214,7 @@ class BookingController extends Controller
 
             if ($marketingUser && $marketingUser->device_token) {
 
-                $fcmService->sendNotification(
+                $this->fcmService->sendNotification(
                     $marketingUser->device_token,
                     "Booking Updated",
                     "A booking assigned to you has been updated.",

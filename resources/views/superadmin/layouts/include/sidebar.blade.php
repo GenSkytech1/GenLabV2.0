@@ -167,6 +167,18 @@
                                         </a>
                                     </li>
                                     <li>
+                                        <a href="{{ route('superadmin.vouchers.create') }}" class="">Generate Vouchers</a>
+                                    </li>
+                                    <li>
+                                        <a href="{{ route('superadmin.vouchers.approve') }}" class="">Approve Vouchers</a>
+                                    </li>
+                                    <li>
+                                        <a href="{{ route('superadmin.accounts.cleared_expenses') }}" class="{{ Request::routeIs('superadmin.accounts.cleared_expenses') ? 'active' : '' }}">Cleared Expenses</a>
+                                    </li>
+                                    <li>
+                                        <a href="{{ route('superadmin.cheques.index') }}" class="{{ Request::routeIs('superadmin.cheques.*') ? 'active' : '' }}">Cheques</a>
+                                    </li>
+                                    <li>
                                         <a href="{{ route('superadmin.cheques.index') }}" class="{{ Request::routeIs('superadmin.cheques.*') ? 'active' : '' }}">Cheques</a>
                                     </li>
                                     <li>
@@ -186,7 +198,7 @@
                                     <li><a href="{{route('superadmin.cashPayments.index')}}">Invoice Transaction</a></li>
                                     <li><a href="{{route('superadmin.client-ledger.index')}}">Client Ledger</a></li>
                                     <li><a href="{{ route('superadmin.marketing-person-ledger.index') }}">Marketing Person Ledger</a></li>
-                                    <li><a href="#">Purchase Bill</a></li> 
+                                    <li><a href="{{ route('superadmin.purchase_bills.index') }}" class="{{ Request::routeIs('superadmin.purchase_bills.*') ? 'active' : '' }}">Purchase Bill</a></li>
                                     <li><a href="{{ route('superadmin.bank.upload') }}">Bank Transactions</a></li>
                                     <li>
                                         <a href="{{ route('superadmin.accounts.payroll.index') }}" class="{{ Request::routeIs('superadmin.accounts.payroll.*') ? 'active' : '' }}">

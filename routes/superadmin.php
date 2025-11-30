@@ -52,6 +52,7 @@ use App\Http\Controllers\Accounts\CashLetterController;
 use App\Http\Controllers\Accounts\ChequeController;
 use App\Http\Controllers\Accounts\BankController;
 use App\Http\Controllers\Accounts\ChequeTemplateController;
+use App\Http\Controllers\Accounts\VoucherController;
 
 use App\Http\Controllers\Accounts\AccountsLetterController;
 use App\Http\Controllers\Accounts\PayrollReviewController;
@@ -93,6 +94,7 @@ Route::middleware(['multi_auth:web,admin'])->prefix('superadmin')->name('superad
         Route::get('/expenses/approved', [MarketingExpenseController::class, 'approved'])->name('expenses.approved');
         Route::get('/expenses/rejected', [MarketingExpenseController::class, 'rejected'])->name('expenses.rejected');
         Route::get('/expenses/export/pdf', [MarketingExpenseController::class, 'exportPdf'])->name('expenses.export.pdf');
+        Route::get('/expenses/in-account', [MarketingExpenseController::class, 'inAccount'])->name('expenses.in_account');
         Route::get('/expenses/export/excel', [MarketingExpenseController::class, 'exportExcel'])->name('expenses.export.excel');
         Route::post('/expenses', [MarketingExpenseController::class, 'store'])->name('expenses.store');
         Route::get('/persons', [MarketingExpenseController::class, 'persons'])->name('persons');
@@ -326,6 +328,343 @@ Route::middleware(['multi_auth:web,admin'])->prefix('superadmin')->name('superad
         Route::get('cheques/{cheque}/print-preview', [ChequeController::class, 'printPreview'])->name('cheques.printPreview');
 
         Route::get('cash-letter/payments', [CashLetterController::class, 'showMultiple'])->name('cashLetter.payments.showMultiple');
+
+        // Vouchers - Generate & Approve
+        Route::prefix('vouchers')->name('vouchers.')->group(function () {
+            Route::get('create', [VoucherController::class, 'create'])->name('create');
+            Route::post('/', [VoucherController::class, 'store'])->name('store');
+            Route::get('/', [VoucherController::class, 'index'])->name('index');
+            Route::get('approve', [VoucherController::class, 'approveIndex'])->name('approve');
+            Route::get('export/pdf', [VoucherController::class, 'exportPdf'])->name('export.pdf');
+            Route::get('export/excel', [VoucherController::class, 'exportExcel'])->name('export.excel');
+            Route::patch('{voucher}/approve', [VoucherController::class, 'approve'])->name('approve.action');
+            Route::patch('{voucher}/reject', [VoucherController::class, 'reject'])->name('reject.action');
+            // Update payment status (paid/unpaid)
+            Route::patch('{voucher}/payment', [VoucherController::class, 'payment'])->name('payment');
+            Route::get('{voucher}/generate', [VoucherController::class, 'generate'])->name('generate');
+            Route::get('{voucher}/edit', [VoucherController::class, 'edit'])->name('edit');
+            Route::put('{voucher}', [VoucherController::class, 'update'])->name('update');
+            Route::delete('{voucher}', [VoucherController::class, 'destroy'])->name('destroy');
+        });
+
+        // Purchase Bills - simple index and upload (stores files to storage/app/public/purchase_bills)
+        Route::prefix('purchase-bills')->name('purchase_bills.')->group(function () {
+            // Export to PDF (printable HTML view)
+            Route::get('export/pdf', function (\Illuminate\Http\Request $request) {
+                $users = \App\Models\User::orderBy('name')->get()->keyBy('id');
+                $files = \Illuminate\Support\Facades\Storage::disk('public')->files('purchase_bills');
+                $files = array_values(array_filter($files, function ($path) {
+                    return preg_match('/\.(pdf|jpg|jpeg|png)$/i', $path);
+                }));
+
+                $collection = collect($files)->map(function ($path) use ($users) {
+                    $metaPath = $path . '.json';
+                    $meta = [];
+                    if (\Illuminate\Support\Facades\Storage::disk('public')->exists($metaPath)) {
+                        try {
+                            $meta = json_decode(\Illuminate\Support\Facades\Storage::disk('public')->get($metaPath), true) ?: [];
+                        } catch (\Throwable $e) {
+                            $meta = [];
+                        }
+                    }
+
+                    $userName = null;
+                    if (!empty($meta['user_id']) && $users->has($meta['user_id'])) {
+                        $userName = $users->get($meta['user_id'])->name;
+                    }
+
+                    return [
+                        'name' => basename($path),
+                        'url' => asset('storage/' . $path),
+                        'uploaded_at' => date('d M Y H:i', \Illuminate\Support\Facades\Storage::disk('public')->lastModified($path)),
+                        'amount' => $meta['amount'] ?? null,
+                        'bill_date' => $meta['bill_date'] ?? null,
+                        'description' => $meta['description'] ?? null,
+                        'user_name' => $userName,
+                    ];
+                })->values()->all();
+
+                // allow filtering similarly to index (search + month/year)
+                if ($request->filled('search')) {
+                    $q = strtolower($request->get('search'));
+                    $collection = array_values(array_filter($collection, function ($item) use ($q) {
+                        return strpos(strtolower($item['name']), $q) !== false || strpos(strtolower($item['user_name'] ?? ''), $q) !== false;
+                    }));
+                }
+
+                if ($request->filled('month') || $request->filled('year') || $request->filled('financial_year')) {
+                    $m = $request->get('month');
+                    $y = $request->get('year');
+                    $fy = $request->get('financial_year');
+                    $collection = array_values(array_filter($collection, function ($item) use ($m, $y, $fy) {
+                        // If financial year is provided, use it (April 1 - Mar 31)
+                        if (!empty($fy)) {
+                            $startYear = (int) preg_replace('/[^0-9].*/', '', $fy);
+                            if ($startYear <= 0) return false;
+                            $startTs = strtotime($startYear . '-04-01');
+                            $endTs = strtotime(($startYear + 1) . '-03-31 23:59:59');
+                            $d = empty($item['bill_date']) ? null : strtotime($item['bill_date']);
+                            if (!$d) return false;
+                            return $d >= $startTs && $d <= $endTs;
+                        }
+
+                        if (empty($item['bill_date'])) return false;
+                        $ts = strtotime($item['bill_date']);
+                        if ($ts === false) return false;
+                        if ($m && (int)date('n', $ts) !== (int)$m) return false;
+                        if ($y && (int)date('Y', $ts) !== (int)$y) return false;
+                        return true;
+                    }));
+                }
+
+                return view('superadmin.accounts.purchase_bills.print', ['purchaseBills' => $collection]);
+            })->name('export.pdf');
+
+            // Export to Excel (CSV)
+            Route::get('export/excel', function (\Illuminate\Http\Request $request) {
+                $users = \App\Models\User::orderBy('name')->get()->keyBy('id');
+                $files = \Illuminate\Support\Facades\Storage::disk('public')->files('purchase_bills');
+                $files = array_values(array_filter($files, function ($path) {
+                    return preg_match('/\.(pdf|jpg|jpeg|png)$/i', $path);
+                }));
+
+                $collection = collect($files)->map(function ($path) use ($users) {
+                    $metaPath = $path . '.json';
+                    $meta = [];
+                    if (\Illuminate\Support\Facades\Storage::disk('public')->exists($metaPath)) {
+                        try {
+                            $meta = json_decode(\Illuminate\Support\Facades\Storage::disk('public')->get($metaPath), true) ?: [];
+                        } catch (\Throwable $e) {
+                            $meta = [];
+                        }
+                    }
+
+                    $userName = null;
+                    if (!empty($meta['user_id']) && $users->has($meta['user_id'])) {
+                        $userName = $users->get($meta['user_id'])->name;
+                    }
+
+                    return [
+                        'name' => basename($path),
+                        'url' => asset('storage/' . $path),
+                        'uploaded_at' => date('d M Y H:i', \Illuminate\Support\Facades\Storage::disk('public')->lastModified($path)),
+                        'amount' => $meta['amount'] ?? null,
+                        'bill_date' => $meta['bill_date'] ?? null,
+                        'description' => $meta['description'] ?? null,
+                        'user_name' => $userName,
+                    ];
+                })->values()->all();
+
+                // allow filtering (search + month/year) before CSV generation
+                if ($request->filled('search')) {
+                    $q = strtolower($request->get('search'));
+                    $collection = array_values(array_filter($collection, function ($item) use ($q) {
+                        return strpos(strtolower($item['name']), $q) !== false || strpos(strtolower($item['user_name'] ?? ''), $q) !== false;
+                    }));
+                }
+
+                if ($request->filled('month') || $request->filled('year') || $request->filled('financial_year')) {
+                    $m = $request->get('month');
+                    $y = $request->get('year');
+                    $fy = $request->get('financial_year');
+                    $collection = array_values(array_filter($collection, function ($item) use ($m, $y, $fy) {
+                        if (!empty($fy)) {
+                            $startYear = (int) preg_replace('/[^0-9].*/', '', $fy);
+                            if ($startYear <= 0) return false;
+                            $startTs = strtotime($startYear . '-04-01');
+                            $endTs = strtotime(($startYear + 1) . '-03-31 23:59:59');
+                            $d = empty($item['bill_date']) ? null : strtotime($item['bill_date']);
+                            if (!$d) return false;
+                            return $d >= $startTs && $d <= $endTs;
+                        }
+
+                        if (empty($item['bill_date'])) return false;
+                        $ts = strtotime($item['bill_date']);
+                        if ($ts === false) return false;
+                        if ($m && (int)date('n', $ts) !== (int)$m) return false;
+                        if ($y && (int)date('Y', $ts) !== (int)$y) return false;
+                        return true;
+                    }));
+                }
+
+                // CSV generation
+                $filename = 'purchase_bills_' . date('Ymd_His') . '.csv';
+                $headers = [
+                    'Content-Type' => 'text/csv',
+                    'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+                ];
+
+                $callback = function() use ($collection) {
+                    $out = fopen('php://output', 'w');
+                    fputcsv($out, ['User','Amount','Bill Date','Description','Uploaded At','File URL']);
+                    foreach ($collection as $row) {
+                        fputcsv($out, [
+                            $row['user_name'] ?? '',
+                            isset($row['amount']) ? number_format((float)$row['amount'], 2) : '',
+                            $row['bill_date'] ?? '',
+                            $row['description'] ?? '',
+                            $row['uploaded_at'] ?? '',
+                            $row['url'] ?? '',
+                        ]);
+                    }
+                    fclose($out);
+                };
+
+                return response()->streamDownload($callback, $filename, $headers);
+            })->name('export.excel');
+            Route::get('/', function (\Illuminate\Http\Request $request) {
+                // Fetch users to populate select and to resolve user names for metadata
+                $users = \App\Models\User::orderBy('name')->get()->keyBy('id');
+
+                $files = \Illuminate\Support\Facades\Storage::disk('public')->files('purchase_bills');
+
+                // Only include allowed file types (exclude .json sidecars)
+                $files = array_values(array_filter($files, function ($path) {
+                    return preg_match('/\.(pdf|jpg|jpeg|png)$/i', $path);
+                }));
+
+                $collection = collect($files)->map(function ($path) use ($users) {
+                    $metaPath = $path . '.json';
+                    $meta = [];
+                    if (\Illuminate\Support\Facades\Storage::disk('public')->exists($metaPath)) {
+                        try {
+                            $meta = json_decode(\Illuminate\Support\Facades\Storage::disk('public')->get($metaPath), true) ?: [];
+                        } catch (\Throwable $e) {
+                            $meta = [];
+                        }
+                    }
+
+                    $userName = null;
+                    if (!empty($meta['user_id']) && $users->has($meta['user_id'])) {
+                        $userName = $users->get($meta['user_id'])->name;
+                    }
+
+                    return [
+                        'path' => $path,
+                        'name' => basename($path),
+                        'url' => asset('storage/' . $path),
+                        'uploaded_at' => date('d M Y H:i', \Illuminate\Support\Facades\Storage::disk('public')->lastModified($path)),
+                        'amount' => $meta['amount'] ?? null,
+                        'bill_date' => $meta['bill_date'] ?? null,
+                        'description' => $meta['description'] ?? null,
+                        'user_id' => $meta['user_id'] ?? null,
+                        'user_name' => $userName,
+                    ];
+                })->values()->all();
+
+                // Simple search by file name if provided
+                if ($request->filled('search')) {
+                    $q = strtolower($request->get('search'));
+                    $collection = array_values(array_filter($collection, function ($item) use ($q) {
+                        return strpos(strtolower($item['name']), $q) !== false || strpos(strtolower($item['user_name'] ?? ''), $q) !== false;
+                    }));
+                }
+
+                // Filter by month/year or financial_year if provided (applies to bill_date metadata)
+                if ($request->filled('month') || $request->filled('year') || $request->filled('financial_year')) {
+                    $m = $request->get('month');
+                    $y = $request->get('year');
+                    $fy = $request->get('financial_year');
+                    $collection = array_values(array_filter($collection, function ($item) use ($m, $y, $fy) {
+                        if (!empty($fy)) {
+                            $startYear = (int) preg_replace('/[^0-9].*/', '', $fy);
+                            if ($startYear <= 0) return false;
+                            $startTs = strtotime($startYear . '-04-01');
+                            $endTs = strtotime(($startYear + 1) . '-03-31 23:59:59');
+                            $d = empty($item['bill_date']) ? null : strtotime($item['bill_date']);
+                            if (!$d) return false;
+                            return $d >= $startTs && $d <= $endTs;
+                        }
+
+                        if (empty($item['bill_date'])) return false;
+                        $ts = strtotime($item['bill_date']);
+                        if ($ts === false) return false;
+                        if ($m && (int)date('n', $ts) !== (int)$m) return false;
+                        if ($y && (int)date('Y', $ts) !== (int)$y) return false;
+                        return true;
+                    }));
+                }
+
+                return view('superadmin.accounts.purchase_bills.index', ['purchaseBills' => $collection, 'users' => \App\Models\User::orderBy('name')->get()]);
+            })->name('index');
+
+            Route::post('/', function (\Illuminate\Http\Request $request) {
+                $request->validate([
+                    'attachment' => 'required|file|mimes:pdf,jpg,jpeg,png|max:10240',
+                    'user_id' => 'required|exists:users,id',
+                    'bill_date' => 'required|date',
+                    'description' => 'nullable|string',
+                    'amount' => 'nullable|numeric',
+                ]);
+
+                $file = $request->file('attachment');
+                $path = $file->store('purchase_bills', 'public');
+
+                // Save metadata sidecar JSON next to file
+                $meta = [
+                    'original_name' => $file->getClientOriginalName(),
+                    'amount' => $request->input('amount'),
+                    'bill_date' => $request->input('bill_date'),
+                    'description' => $request->input('description'),
+                    'user_id' => $request->input('user_id'),
+                    'uploaded_at' => now()->toDateTimeString(),
+                ];
+
+                $metaPath = $path . '.json';
+                \Illuminate\Support\Facades\Storage::disk('public')->put($metaPath, json_encode($meta));
+
+                return redirect()->route('superadmin.purchase_bills.index')->with('success', 'Purchase bill uploaded successfully');
+            })->name('store');
+
+            // Update metadata for a purchase bill (file path is base64 encoded)
+            Route::put('{file}', function ($file, \Illuminate\Http\Request $request) {
+                $path = base64_decode($file);
+                if (!$path || !\Illuminate\Support\Facades\Storage::disk('public')->exists($path)) {
+                    return redirect()->route('superadmin.purchase_bills.index')->with('error', 'File not found');
+                }
+
+                $request->validate([
+                    'user_id' => 'required|exists:users,id',
+                    'bill_date' => 'required|date',
+                    'description' => 'nullable|string',
+                    'amount' => 'nullable|numeric',
+                ]);
+
+                $metaPath = $path . '.json';
+                $meta = [];
+                if (\Illuminate\Support\Facades\Storage::disk('public')->exists($metaPath)) {
+                    $meta = json_decode(\Illuminate\Support\Facades\Storage::disk('public')->get($metaPath), true) ?: [];
+                }
+
+                $meta = array_merge($meta, [
+                    'user_id' => $request->input('user_id'),
+                    'bill_date' => $request->input('bill_date'),
+                    'description' => $request->input('description'),
+                    'amount' => $request->input('amount'),
+                    'updated_at' => now()->toDateTimeString(),
+                ]);
+
+                \Illuminate\Support\Facades\Storage::disk('public')->put($metaPath, json_encode($meta));
+
+                return redirect()->route('superadmin.purchase_bills.index')->with('success', 'Purchase bill updated');
+            })->where('file', '.*')->name('update');
+
+            // Delete file and its metadata (file path is base64 encoded)
+            Route::delete('{file}', function ($file) {
+                $path = base64_decode($file);
+                if (!$path || !\Illuminate\Support\Facades\Storage::disk('public')->exists($path)) {
+                    return redirect()->route('superadmin.purchase_bills.index')->with('error', 'File not found');
+                }
+
+                \Illuminate\Support\Facades\Storage::disk('public')->delete($path);
+                $metaPath = $path . '.json';
+                if (\Illuminate\Support\Facades\Storage::disk('public')->exists($metaPath)) {
+                    \Illuminate\Support\Facades\Storage::disk('public')->delete($metaPath);
+                }
+
+                return redirect()->route('superadmin.purchase_bills.index')->with('success', 'Purchase bill deleted');
+            })->where('file', '.*')->name('destroy');
+        });
 
 
         // Bank Transactions

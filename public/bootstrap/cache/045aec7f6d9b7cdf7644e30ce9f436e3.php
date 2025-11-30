@@ -1,6 +1,7 @@
 <?php $__env->startSection('title', 'Received Reports'); ?>
 
 <?php $__env->startSection('content'); ?>
+
 <div class="content">
     <div class="d-flex align-items-center justify-content-between flex-wrap gap-3 mb-3">
         <h4 class="mb-0">Received Reports</h4>
@@ -206,6 +207,14 @@
                                         } elseif (!empty($item->issue_date)) {
                                             try {
                                                 $issueValue = \Carbon\Carbon::parse($item->issue_date)->format('Y-m-d');
+                                            } catch (\Throwable $e) {
+                                                $issueValue = '';
+                                            }
+                                        }
+
+                                        if (!$issueValue && $assignedReport && !empty($assignedReport->pivot->issue_to_date)) {
+                                            try {
+                                                $issueValue = \Carbon\Carbon::parse($assignedReport->pivot->issue_to_date)->format('Y-m-d');
                                             } catch (\Throwable $e) {
                                                 $issueValue = '';
                                             }
@@ -416,6 +425,8 @@
 
 <?php $__env->startPush('scripts'); ?>
 <script>
+// LoadingOverlay is provided globally by the layout (window.LoadingOverlay)
+
 (function initReceivedPage() {
     const init = function() {
         // Safe JSON parser for fetch responses
@@ -694,7 +705,10 @@
                     return;
                 }
                 if (lettersListEl) lettersListEl.innerHTML = '<div class="text-muted">Loading...</div>';
-                const resp = await fetch(listUrl, { headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' } });
+                const resp = await LoadingOverlay.wrap(
+                    () => fetch(listUrl, { headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' } }),
+                    showModal ? 'Loading letters...' : 'Refreshing letters...'
+                );
                 const data = await resp.json();
                 const letters = Array.isArray(data.letters) ? data.letters : [];
                 if (lettersListEl) {
@@ -713,29 +727,54 @@
                                 return u.toString();
                             } catch (_) { return raw; }
                         };
+                        const frag = document.createDocumentFragment();
                         letters.forEach(function(l) {
                             const a = document.createElement('a');
                             const url = l.download_url || l.encoded_url || l.url || l.path || '#';
                             const name = (l.name || l.filename || 'Letter');
                             const dateStr = (l.uploaded_at || l.created_at || '');
                             const uploader = l.uploader_name || l.uploaded_by || l.uploader || '';
-                            const isPdf = url.toLowerCase().endsWith('.pdf');
+                            const isPdf = (typeof url === 'string') && url.toLowerCase().endsWith('.pdf');
                             const pages = (typeof l.pages === 'number' && l.pages > 0) ? l.pages : null;
                             a.href = url;
                             a.target = '_blank';
                             a.rel = 'noopener';
                             a.className = 'list-group-item list-group-item-action d-flex justify-content-between align-items-center';
-                            // Left: file name, Right: (page count badge if pdf) + date + uploader
-                            a.innerHTML =
-                                '<span class="me-2 text-truncate" style="max-width:60%">' + name + '</span>' +
-                                '<span class="d-inline-flex align-items-center gap-2 ms-auto">' +
-                                (isPdf ? '<span class="badge rounded-pill bg-light text-dark border pdf-page-count" title="Pages" style="min-width:34px;">' + (pages ? pages + 'p' : '..') + '</span>' : '') +
-                                (uploader ? '<span class="badge bg-info text-dark ms-1" title="Uploaded by">' + uploader + '</span>' : '') +
-                                '<span class="small text-muted ms-2">' + dateStr + '</span>' +
-                                '</span>';
-                            lettersListEl.appendChild(a);
+                            // build left and right parts as nodes to avoid innerHTML reflows
+                            const left = document.createElement('span');
+                            left.className = 'me-2 text-truncate';
+                            left.style.maxWidth = '60%';
+                            left.textContent = name;
+
+                            const right = document.createElement('span');
+                            right.className = 'd-inline-flex align-items-center gap-2 ms-auto';
+
+                            if (isPdf) {
+                                const badge = document.createElement('span');
+                                badge.className = 'badge rounded-pill bg-light text-dark border pdf-page-count';
+                                badge.title = 'Pages';
+                                badge.style.minWidth = '34px';
+                                badge.textContent = pages ? (pages + 'p') : '..';
+                                right.appendChild(badge);
+                            }
+                            if (uploader) {
+                                const up = document.createElement('span');
+                                up.className = 'badge bg-info text-dark ms-1';
+                                up.title = 'Uploaded by';
+                                up.textContent = uploader;
+                                right.appendChild(up);
+                            }
+                            const dt = document.createElement('span');
+                            dt.className = 'small text-muted ms-2';
+                            dt.textContent = dateStr;
+                            right.appendChild(dt);
+
+                            a.appendChild(left);
+                            a.appendChild(right);
+                            frag.appendChild(a);
                             if (isPdf && !pages) pdfAnchors.push(a);
                         });
+                        lettersListEl.appendChild(frag);
                         // Dynamically load pdf.js (only once) and compute page counts
                         if (pdfAnchors.length) {
                             const ensurePdfJs = () => new Promise((resolve, reject) => {
@@ -752,14 +791,14 @@
                                 document.head.appendChild(s);
                             });
                             ensurePdfJs().then(async () => {
+                                // process sequentially with tiny pauses to avoid blocking the UI
+                                const sleep = (ms) => new Promise(r => setTimeout(r, ms));
                                 for (const a of pdfAnchors) {
                                     try {
                                         let raw = a.getAttribute('data-pdf-url') || a.getAttribute('href');
                                         const attempts = [];
                                         if (raw) attempts.push(raw);
-                                        // If relative path missing leading slash
                                         if (raw && raw[0] !== '/') attempts.push('/' + raw);
-                                        // Sanitized
                                         if (raw) attempts.push(sanitizePdfUrl(raw));
                                         let pdf = null, lastErr = null;
                                         for (const candidate of attempts) {
@@ -781,6 +820,8 @@
                                         const span = a.querySelector('.pdf-page-count');
                                         if (span) span.textContent = '?p';
                                     }
+                                    // give the browser a moment to paint between heavy ops
+                                    await sleep(40);
                                 }
                             }).catch(() => {
                                 pdfAnchors.forEach(a => { const span = a.querySelector('.pdf-page-count'); if (span) span.textContent = '?p'; });
@@ -808,14 +849,14 @@
                 const token = uploadForm.querySelector('input[name="_token"]').value;
                 const fd = new FormData(uploadForm);
                 if (btn) { btn.disabled = true; btn.textContent = 'Uploading...'; }
-                fetch(uploadForm.action, {
-                    method: 'POST',
-                    headers: { 'X-CSRF-TOKEN': token, 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
-                    body: fd
-                }).then(async (resp) => {
-                    const data = await resp.json().catch(() => null);
-                    return data;
-                }).then(function(data) {
+                LoadingOverlay.wrap(async () => {
+                    const resp = await fetch(uploadForm.action, {
+                        method: 'POST',
+                        headers: { 'X-CSRF-TOKEN': token, 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                        body: fd
+                    });
+                    return resp.json().catch(() => null);
+                }, 'Uploading files...').then(function(data) {
                     if (data && data.ok) {
                         if (window.Swal) { Swal.fire({ icon: 'success', title: 'Uploaded', text: 'Letters uploaded successfully.' }); }
                         loadLetters(false);
@@ -848,14 +889,14 @@
 
                 if (mode === 'receive') {
                     // Persist as received immediately so it stays visible on refresh
-                    fetch(form.action, {
+                    LoadingOverlay.wrap(() => fetch(form.action, {
                         method: 'POST',
                         headers: {
                             'X-CSRF-TOKEN': form.querySelector('input[name="_token"]').value,
                             'Accept': 'application/json',
                             'X-Requested-With': 'XMLHttpRequest'
                         }
-                    }).then(safeJson).then(data => {
+                    }).then(safeJson), 'Receiving job...').then(data => {
                         if (data && data.ok) {
                             const cell = document.querySelector('.status-cell[data-id="' + id + '"]');
                             if (cell) {
@@ -904,7 +945,7 @@
                     return;
                 }
 
-                fetch(form.action, {
+                LoadingOverlay.wrap(() => fetch(form.action, {
                     method: 'POST',
                     headers: {
                         'X-CSRF-TOKEN': form.querySelector('input[name="_token"]').value,
@@ -913,7 +954,7 @@
                         'X-Requested-With': 'XMLHttpRequest'
                     },
                     body: new URLSearchParams({ issue_date: issueInput.value })
-    }).then(safeJson).then(data => {
+                }).then(safeJson), 'Saving issue date...').then(data => {
                     if (data && data.ok) {
                         const cell = document.querySelector('.status-cell[data-id="' + id + '"]');
                         if (cell) {
@@ -958,16 +999,16 @@
                 ev.preventDefault();
                 const csrf = receiveAllForm.querySelector('input[name="_token"]').value;
                 const job = receiveAllForm.querySelector('input[name="job"]').value;
-    fetch(receiveAllForm.action, {
+                LoadingOverlay.wrap(() => fetch(receiveAllForm.action, {
                     method: 'POST',
                     headers: {
                         'X-CSRF-TOKEN': csrf,
                         'Content-Type': 'application/x-www-form-urlencoded',
-            'Accept': 'application/json',
-            'X-Requested-With': 'XMLHttpRequest'
+                        'Accept': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
                     },
                     body: new URLSearchParams({ job })
-        }).then(safeJson).then(data => {
+                }).then(safeJson), 'Receiving all jobs...').then(data => {
                     // Update UI to allow entering issue dates for all rows
                     document.querySelectorAll('.issue-date-input').forEach(function(input) {
                         input.classList.remove('d-none');
@@ -1055,16 +1096,16 @@
                     return { id: Number(id), issue_date: input ? input.value || null : null };
                 });
                 const csrf = submitAllForm.querySelector('input[name="_token"]').value;
-    fetch(submitAllForm.action, {
+                LoadingOverlay.wrap(() => fetch(submitAllForm.action, {
                     method: 'POST',
                     headers: {
                         'X-CSRF-TOKEN': csrf,
                         'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'X-Requested-With': 'XMLHttpRequest'
+                        'Accept': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
                     },
                     body: JSON.stringify({ items })
-        }).then(safeJson).then(data => {
+                }).then(safeJson), 'Submitting issue dates...').then(data => {
                     if (data && data.ok) {
                         if (window.Swal) {
                             Swal.fire({ icon: 'success', title: 'Saved', text: 'All Issue Dates submitted.' });
@@ -1118,32 +1159,56 @@
 
 // js for tab container
 document.addEventListener("DOMContentLoaded", () => {
-  const tabs = document.querySelectorAll(".tab-button");
-  const columnHeader = document.getElementById("column-header");
-  const tableRows = document.querySelectorAll("tbody tr");
+    const tabs = document.querySelectorAll(".tab-button");
+    const columnHeader = document.getElementById("column-header");
+    const STORAGE_KEY = "receivedReportsTab";
 
-  tabs.forEach(tab => {
-    tab.addEventListener("click", () => {
-      tabs.forEach(t => t.classList.remove("active"));
-      tab.classList.add("active");
+    const persistMode = (mode) => {
+        try {
+            localStorage.setItem(STORAGE_KEY, mode);
+        } catch (_) {}
+    };
 
-      const mode = tab.dataset.tab;
+    const readStoredMode = () => {
+        try {
+            return localStorage.getItem(STORAGE_KEY) || "all";
+        } catch (_) {
+            return "all";
+        }
+    };
 
-      if (mode === "issue") {
-        columnHeader.textContent = "Issue Date";
-        tableRows.forEach(row => {
-          row.querySelector(".report-select")?.classList.add("d-none");
-          row.querySelector(".issue-date")?.classList.remove("d-none");
+    const applyMode = (mode) => {
+        const targetTab = Array.from(tabs).find(t => t.dataset.tab === mode) || tabs[0];
+        const normalizedMode = targetTab ? targetTab.dataset.tab : "all";
+
+        tabs.forEach(t => t.classList.remove("active"));
+        targetTab?.classList.add("active");
+
+        const rows = document.querySelectorAll("tbody tr");
+        if (normalizedMode === "issue") {
+            columnHeader.textContent = "Issue Date";
+            rows.forEach(row => {
+                row.querySelector(".report-select")?.classList.add("d-none");
+                row.querySelector(".issue-date")?.classList.remove("d-none");
+            });
+        } else {
+            columnHeader.textContent = "Select Report";
+            rows.forEach(row => {
+                row.querySelector(".report-select")?.classList.remove("d-none");
+                row.querySelector(".issue-date")?.classList.add("d-none");
+            });
+        }
+
+        persistMode(normalizedMode);
+    };
+
+    tabs.forEach(tab => {
+        tab.addEventListener("click", () => {
+            applyMode(tab.dataset.tab || "all");
         });
-      } else {
-        columnHeader.textContent = "Select Report";
-        tableRows.forEach(row => {
-          row.querySelector(".report-select")?.classList.remove("d-none");
-          row.querySelector(".issue-date")?.classList.add("d-none");
-        });
-      }
     });
-  });
+
+    applyMode(readStoredMode());
 });
 
 

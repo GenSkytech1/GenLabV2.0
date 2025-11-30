@@ -93,6 +93,53 @@ return [
             // 'trust_server_certificate' => env('DB_TRUST_SERVER_CERTIFICATE', 'false'),
         ],
 
+        'mysql_old' => [
+    'driver' => 'mysql',
+    'host' => '127.0.0.1',
+    'port' => '3306',
+    'database' => 'itl',   // your old DB name
+    'username' => 'root',
+    'password' => '',
+    'charset' => 'utf8mb4',
+    'collation' => 'utf8mb4_unicode_ci',
+],
+
+        // Alias connection name for the old ITL database (used by import command)
+        'itl' => [
+            'driver' => 'mysql',
+            'host' => env('ITL_DB_HOST', '127.0.0.1'),
+            'port' => env('ITL_DB_PORT', '3306'),
+            'database' => env('ITL_DB_DATABASE', 'itl'),
+            'username' => env('ITL_DB_USERNAME', 'root'),
+            'password' => env('ITL_DB_PASSWORD', ''),
+            'unix_socket' => env('ITL_DB_SOCKET', ''),
+            'charset' => 'utf8mb4',
+            'collation' => 'utf8mb4_unicode_ci',
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'strict' => true,
+            'engine' => null,
+        ],
+
+        // Alias connection name for the Laravel 7 (new) database
+        'laravel7' => [
+            'driver' => 'mysql',
+            'url' => env('DATABASE_URL'),
+            'host' => env('DB_HOST', '127.0.0.1'),
+            'port' => env('DB_PORT', '3306'),
+            'database' => env('DB_DATABASE', 'forge'),
+            'username' => env('DB_USERNAME', 'forge'),
+            'password' => env('DB_PASSWORD', ''),
+            'unix_socket' => env('DB_SOCKET', ''),
+            'charset' => 'utf8mb4',
+            'collation' => 'utf8mb4_unicode_ci',
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'strict' => true,
+            'engine' => null,
+        ],
+
+
     ],
 
     /*
