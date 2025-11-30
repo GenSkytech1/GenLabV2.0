@@ -16,13 +16,15 @@ use App\Services\GetUserActiveDepartment;
 use App\Services\FileUploadService;
 use App\Jobs\GenerateBookingCards;
 use App\Services\BookingCardService;
+use App\Services\FCMService; 
 
 
 class BookingController extends Controller
 {
     protected GetUserActiveDepartment $departmentService;
     protected FileUploadService $fileUploadService;
-    protected BookingCardService $bookingCardService; 
+    protected BookingCardService $bookingCardService;  
+    protected FCMService $fcmService; 
 
 
 
@@ -34,6 +36,8 @@ class BookingController extends Controller
         $this->departmentService = $departmentService;
         $this->fileUploadService = $fileUploadService;
         $this->bookingCardService = $bookingCardService; 
+        $this->fcmService          = $fcmService; 
+
         $this->authorizeResource(NewBooking::class, 'new_booking');
     }
 
@@ -201,10 +205,26 @@ class BookingController extends Controller
                     } 
 
                 }
-            });
+            }); 
 
-            
 
+            // Find user where user_code == marketing_id
+            $marketingUser = User::where('user_code', $request->marketing_id)->first();
+
+            if ($marketingUser && $marketingUser->device_token) {
+
+                $fcmService->sendNotification(
+                    $marketingUser->device_token,
+                    "Booking Updated",
+                    "A booking assigned to you has been updated.",
+                    [
+                        "booking_id" => $new_booking->id,
+                        "updated_by" => auth()->user()->name ?? "System",
+                    ]
+                );
+            }
+
+        
             return redirect()
                 ->back()
                 ->with('success', 'Booking updated successfully!');

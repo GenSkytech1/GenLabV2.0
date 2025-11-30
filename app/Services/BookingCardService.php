@@ -27,7 +27,7 @@ class BookingCardService
             
             // Check if job_order_date is before April 21, 2023
             $jobOrderDate = \Carbon\Carbon::parse($booking->job_order_date);
-            $cutoffDate = \Carbon\Carbon::parse('2023-04-21');
+            $cutoffDate = \Carbon\Carbon::parse('2025-04-23');
             
             if ($jobOrderDate->lt($cutoffDate)) {
                 $companyName = $companyName_old;
@@ -55,5 +55,7 @@ class BookingCardService
 
             throw $e;
         }
-    }
+    } 
+    
 }
+ 

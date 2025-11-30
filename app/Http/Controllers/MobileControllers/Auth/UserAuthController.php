@@ -59,5 +59,23 @@ class UserAuthController extends Controller
             'token_type'   => 'bearer',
             'expires_in'   => Auth::guard('api')->factory()->getTTL() * 60 * 24 * 30
         ]);
+    } 
+
+
+    public function saveDeviceToken(Request $request)
+    {
+        $request->validate([
+            'device_token' => 'required|string',
+        ]);
+
+        $user = auth()->user();  // Only if using auth
+
+        $user->device_token = $request->device_token;
+        $user->save();
+
+        return response()->json([
+            'message' => 'Device token saved successfully!'
+        ]);
     }
+
 }

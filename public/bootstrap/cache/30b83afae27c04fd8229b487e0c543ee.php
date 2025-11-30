@@ -110,8 +110,8 @@
                                 </div>
 
                                 <div class="col-lg-4 col-sm-6 col-12 mt-3">
-                                    <label class="form-label">Contact Email <span class="text-danger">*</span></label>
-                                    <input type="email" class="form-control" name="contact_email" value="<?php echo e(old('contact_email')); ?>" required>
+                                    <label class="form-label">Contact Email <span class="text-danger"></span></label>
+                                    <input type="email" class="form-control" name="contact_email" value="<?php echo e(old('contact_email')); ?>">
                                 </div>
                                 <div class="col-lg-4 col-sm-6 col-12 mt-3">
                                     <label class="form-label">Department<span class="text-danger">*</span></label>
@@ -461,4 +461,4 @@
 
 <?php $__env->stopSection(); ?>
 
-<?php echo $__env->make('superadmin.layouts.app', \Illuminate\Support\Arr::except(get_defined_vars(), ['__data', '__path']))->render(); ?><?php /**PATH A:\GenTech\htdocs\GenlabV1.0\GenLabV1.0\resources\views/superadmin/Bookings/newBooking.blade.php ENDPATH**/ ?>
+<?php echo $__env->make('superadmin.layouts.app', array_diff_key(get_defined_vars(), ['__data' => 1, '__path' => 1]))->render(); ?><?php /**PATH A:\GenTech\htdocs\GenlabV1.0\GenLabV1.0\resources\views/superadmin/Bookings/newBooking.blade.php ENDPATH**/ ?>

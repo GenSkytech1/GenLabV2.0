@@ -196,7 +196,6 @@ return [
         App\Providers\EventServiceProvider::class,
         App\Providers\RouteServiceProvider::class, 
 
-        Anand\LaravelPaytmWallet\PaytmWalletServiceProvider::class,
         Tymon\JWTAuth\Providers\LaravelServiceProvider::class,
 
     ],
@@ -211,10 +210,5 @@ return [
     | the aliases are "lazy" loaded so they don't hinder performance.
     |
     */
-
-    'aliases' => Facade::defaultAliases()->merge([
-        // 'ExampleClass' => App\Example\ExampleClass::class,
-         'PaytmWallet' => Anand\LaravelPaytmWallet\Facades\PaytmWallet::class,
-    ])->toArray(),
 
 ];
