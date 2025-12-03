@@ -104,6 +104,14 @@ class ShowBookingByLetterController extends Controller
             $query->whereYear('lab_expected_date', $year);
         }
 
+        // If marketing filter is provided (user_code), limit to bookings for that marketing person
+        if ($request->filled('marketing')) {
+            $marketing = $request->input('marketing');
+            $query->whereHas('booking', function ($bq) use ($marketing) {
+                $bq->where('marketing_id', $marketing);
+            });
+        }
+
         return $query;
     }
 

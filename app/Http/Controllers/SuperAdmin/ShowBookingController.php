@@ -157,6 +157,16 @@ class ShowBookingController extends Controller
             $query->whereYear('job_order_date', $year);
         }
 
+        // Apply marketing filter if present (marketing stores user_code in marketing_id)
+        if ($request->filled('marketing')) {
+            $query->where('marketing_id', $request->input('marketing'));
+        }
+
+        // If user_code filter provided in querystring, apply it
+        if ($request->filled('marketing')) {
+            $query->where('marketing_id', $request->input('marketing'));
+        }
+
         $perPage = (int) $request->get('perPage', 25);
         if (!in_array($perPage, [25, 50, 100])) { $perPage = 25; }
         $bookings = $query->latest()->paginate($perPage)->withQueryString();

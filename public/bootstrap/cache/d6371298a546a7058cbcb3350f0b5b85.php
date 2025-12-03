@@ -1,21 +1,19 @@
-@extends('superadmin.layouts.app')
+<?php $__env->startSection('title', 'Attendance'); ?>
 
-@section('title', 'Attendance')
-
-@section('content')
+<?php $__env->startSection('content'); ?>
 <div class="content">
     <div class="card border-0 shadow-sm mb-4 attendance-hero-card">
         <div class="card-body py-4">
             <div class="row align-items-center g-4">
                 <div class="col-12 col-lg">
                     <h3 class="fw-semibold text-dark mb-2">Attendance Control Panel</h3>
-                    <p class="text-muted mb-0">Stay on top of today's presence, approvals, and syncs. Current window: <span class="fw-semibold text-primary">{{ $todayLabel }}</span>.</p>
+                    <p class="text-muted mb-0">Stay on top of today's presence, approvals, and syncs. Current window: <span class="fw-semibold text-primary"><?php echo e($todayLabel); ?></span>.</p>
                 </div>
                 <div class="col-12 col-lg-auto d-flex flex-wrap gap-2">
                     <a href="#manual-pane" class="btn btn-primary btn-sm" data-bs-toggle="pill" data-bs-target="#manual-pane">
                         <i class="ti ti-clipboard-check me-2"></i>Quick Manual Entry
                     </a>
-                    <a href="{{ route('superadmin.hr.payroll.index') }}" class="btn btn-outline-primary btn-sm">
+                    <a href="<?php echo e(route('superadmin.hr.payroll.index')); ?>" class="btn btn-outline-primary btn-sm">
                         <i class="ti ti-briefcase me-2"></i>Sync With Payroll
                     </a>
                 </div>
@@ -24,27 +22,27 @@
     </div>
 
     <div class="row g-3 mb-4">
-        @php
+        <?php
             $metricCards = [
                 ['label' => 'Present', 'value' => number_format($metrics['present']), 'icon' => 'ti ti-user-check', 'accent' => 'success'],
                 ['label' => 'On Leave', 'value' => number_format($metrics['onLeave']), 'icon' => 'ti ti-plane-departure', 'accent' => 'warning'],
                 ['label' => 'Late Arrivals', 'value' => number_format($metrics['late']), 'icon' => 'ti ti-clock-exclamation', 'accent' => 'info'],
                 ['label' => 'Missing Logs', 'value' => number_format($metrics['missingLogs']), 'icon' => 'ti ti-alert-triangle', 'accent' => 'danger'],
             ];
-        @endphp
-        @foreach($metricCards as $card)
+        ?>
+        <?php $__currentLoopData = $metricCards; $__env->addLoop($__currentLoopData); foreach($__currentLoopData as $card): $__env->incrementLoopIndices(); $loop = $__env->getLastLoop(); ?>
             <div class="col-6 col-xl-3">
-                <div class="attendance-metric-card h-100 attendance-metric-card--{{ $card['accent'] }}">
+                <div class="attendance-metric-card h-100 attendance-metric-card--<?php echo e($card['accent']); ?>">
                     <div class="attendance-metric-icon">
-                        <i class="{{ $card['icon'] }}"></i>
+                        <i class="<?php echo e($card['icon']); ?>"></i>
                     </div>
                     <div>
-                        <p class="text-muted mb-1 small text-uppercase fw-semibold">{{ $card['label'] }}</p>
-                        <h4 class="mb-0 fw-bold">{{ $card['value'] }}</h4>
+                        <p class="text-muted mb-1 small text-uppercase fw-semibold"><?php echo e($card['label']); ?></p>
+                        <h4 class="mb-0 fw-bold"><?php echo e($card['value']); ?></h4>
                     </div>
                 </div>
             </div>
-        @endforeach
+        <?php endforeach; $__env->popLoop(); $loop = $__env->getLastLoop(); ?>
     </div>
 
     <div class="card border-0 shadow-sm mb-4 essl-sync-card">
@@ -54,8 +52,9 @@
                     <h5 class="card-title mb-1">Live eSSL Device Sync</h5>
                     <p class="text-muted small mb-0">Automatic punches from the biometric terminal feed directly into attendance.</p>
                 </div>
-                <span class="badge {{ $esslSync['secret_configured'] ? 'bg-soft-success text-success' : 'bg-soft-danger text-danger' }}">
-                    {{ $esslSync['secret_configured'] ? 'Webhook Active' : 'Secret Not Configured' }}
+                <span class="badge <?php echo e($esslSync['secret_configured'] ? 'bg-soft-success text-success' : 'bg-soft-danger text-danger'); ?>">
+                    <?php echo e($esslSync['secret_configured'] ? 'Webhook Active' : 'Secret Not Configured'); ?>
+
                 </span>
             </div>
 
@@ -63,24 +62,24 @@
                 <div class="col-12 col-lg-6">
                     <label class="form-label small text-muted mb-1">Webhook URL</label>
                     <div class="input-group input-group-sm">
-                        <input type="text" class="form-control" value="{{ $esslSync['webhook_url'] }}" readonly>
-                        <button class="btn btn-outline-secondary" type="button" data-copy="{{ $esslSync['webhook_url'] }}">
+                        <input type="text" class="form-control" value="<?php echo e($esslSync['webhook_url']); ?>" readonly>
+                        <button class="btn btn-outline-secondary" type="button" data-copy="<?php echo e($esslSync['webhook_url']); ?>">
                             <i class="ti ti-copy"></i>
                         </button>
                     </div>
                 </div>
                 <div class="col-6 col-lg-3">
                     <p class="text-muted small mb-1">Default Status</p>
-                    <h6 class="mb-0 fw-semibold">{{ $esslSync['default_status'] }}</h6>
+                    <h6 class="mb-0 fw-semibold"><?php echo e($esslSync['default_status']); ?></h6>
                 </div>
                 <div class="col-6 col-lg-3">
                     <p class="text-muted small mb-1">Last Sync</p>
-                    <h6 class="mb-0 fw-semibold">{{ $esslSync['last_sync_diff'] ?? '—' }}</h6>
+                    <h6 class="mb-0 fw-semibold"><?php echo e($esslSync['last_sync_diff'] ?? '—'); ?></h6>
                 </div>
             </div>
 
             <div class="row g-3 text-center mt-3">
-                @php
+                <?php
                     $stats = $esslSync['last_sync_stats'];
                     $statCards = [
                         ['label' => 'Received', 'value' => $stats['total_events'] ?? 0],
@@ -88,26 +87,26 @@
                         ['label' => 'Missing Employees', 'value' => $stats['missing_employees'] ?? 0],
                         ['label' => 'Invalid Rows', 'value' => $stats['invalid_events'] ?? 0],
                     ];
-                @endphp
-                @foreach($statCards as $stat)
+                ?>
+                <?php $__currentLoopData = $statCards; $__env->addLoop($__currentLoopData); foreach($__currentLoopData as $stat): $__env->incrementLoopIndices(); $loop = $__env->getLastLoop(); ?>
                     <div class="col-6 col-lg-3">
                         <div class="essl-sync-stat">
-                            <p class="text-muted small mb-1">{{ $stat['label'] }}</p>
-                            <h5 class="fw-bold mb-0">{{ $stat['value'] }}</h5>
+                            <p class="text-muted small mb-1"><?php echo e($stat['label']); ?></p>
+                            <h5 class="fw-bold mb-0"><?php echo e($stat['value']); ?></h5>
                         </div>
                     </div>
-                @endforeach
+                <?php endforeach; $__env->popLoop(); $loop = $__env->getLastLoop(); ?>
             </div>
 
-            @if(!$esslSync['secret_configured'])
+            <?php if(!$esslSync['secret_configured']): ?>
                 <div class="alert alert-warning mt-3" role="alert">
                     Configure <code>ESSL_WEBHOOK_SECRET</code> in your environment file and share the secret with the device vendor to activate automatic syncing.
                 </div>
-            @endif
+            <?php endif; ?>
 
-            @if(!empty($esslSync['allowed_ips']))
-                <p class="text-muted small mb-0 mt-2">Allowed IPs: {{ implode(', ', $esslSync['allowed_ips']) }}</p>
-            @endif
+            <?php if(!empty($esslSync['allowed_ips'])): ?>
+                <p class="text-muted small mb-0 mt-2">Allowed IPs: <?php echo e(implode(', ', $esslSync['allowed_ips'])); ?></p>
+            <?php endif; ?>
 
             <div class="table-responsive mt-4">
                 <table class="table table-sm table-hover align-middle mb-0">
@@ -122,22 +121,22 @@
                         </tr>
                     </thead>
                     <tbody>
-                        @forelse($esslSync['recent_logs'] as $log)
+                        <?php $__empty_1 = true; $__currentLoopData = $esslSync['recent_logs']; $__env->addLoop($__currentLoopData); foreach($__currentLoopData as $log): $__env->incrementLoopIndices(); $loop = $__env->getLastLoop(); $__empty_1 = false; ?>
                             <tr>
-                                <td>{{ $log->created_at?->format('d M Y, H:i') }}</td>
-                                <td class="text-muted">{{ $log->device_serial ?? '—' }}</td>
-                                <td class="text-center">{{ $log->total_events }}</td>
-                                <td class="text-center">{{ $log->stored_records }}</td>
-                                <td class="text-center">{{ $log->missing_employees }}</td>
+                                <td><?php echo e($log->created_at?->format('d M Y, H:i')); ?></td>
+                                <td class="text-muted"><?php echo e($log->device_serial ?? '—'); ?></td>
+                                <td class="text-center"><?php echo e($log->total_events); ?></td>
+                                <td class="text-center"><?php echo e($log->stored_records); ?></td>
+                                <td class="text-center"><?php echo e($log->missing_employees); ?></td>
                                 <td>
-                                    <span class="badge {{ $log->status === 'success' ? 'bg-soft-success text-success' : 'bg-soft-warning text-warning' }} text-capitalize">{{ $log->status }}</span>
+                                    <span class="badge <?php echo e($log->status === 'success' ? 'bg-soft-success text-success' : 'bg-soft-warning text-warning'); ?> text-capitalize"><?php echo e($log->status); ?></span>
                                 </td>
                             </tr>
-                        @empty
+                        <?php endforeach; $__env->popLoop(); $loop = $__env->getLastLoop(); if ($__empty_1): ?>
                             <tr>
                                 <td colspan="6" class="text-muted text-center py-3">No device syncs yet. Share the webhook URL with your eSSL machine to begin streaming punches.</td>
                             </tr>
-                        @endforelse
+                        <?php endif; ?>
                     </tbody>
                 </table>
             </div>
@@ -165,57 +164,60 @@
 
                     <div class="tab-content" id="attendanceActionsContent">
                         <div class="tab-pane fade show active" id="manual-pane" role="tabpanel" aria-labelledby="manual-tab">
-                            @if(session('manualAttendanceSuccess'))
+                            <?php if(session('manualAttendanceSuccess')): ?>
                                 <div class="alert alert-success" role="alert">
-                                    {{ session('manualAttendanceSuccess') }}
-                                </div>
-                            @endif
+                                    <?php echo e(session('manualAttendanceSuccess')); ?>
 
-                            @if($errors->manualAttendance?->any())
+                                </div>
+                            <?php endif; ?>
+
+                            <?php if($errors->manualAttendance?->any()): ?>
                                 <div class="alert alert-danger" role="alert">
-                                    {{ $errors->manualAttendance->first() }}
-                                </div>
-                            @endif
+                                    <?php echo e($errors->manualAttendance->first()); ?>
 
-                            <form class="row g-3" method="POST" action="{{ route('superadmin.hr.attendance.store-manual') }}">
-                                @csrf
+                                </div>
+                            <?php endif; ?>
+
+                            <form class="row g-3" method="POST" action="<?php echo e(route('superadmin.hr.attendance.store-manual')); ?>">
+                                <?php echo csrf_field(); ?>
                                 <div class="col-12 col-lg-6">
                                     <label class="form-label">Employee</label>
                                     <select class="form-select" name="employee_id" required>
                                         <option value="" disabled selected>Select employee</option>
-                                        @foreach($employeeOptions as $employee)
-                                            <option value="{{ $employee->id }}" @selected(old('employee_id') == $employee->id)>
-                                                {{ $employee->employee_code ? $employee->employee_code.' - ' : '' }}{{ trim($employee->first_name.' '.$employee->last_name) }}
-                                                @if($employee->department)
-                                                    ({{ $employee->department }})
-                                                @endif
+                                        <?php $__currentLoopData = $employeeOptions; $__env->addLoop($__currentLoopData); foreach($__currentLoopData as $employee): $__env->incrementLoopIndices(); $loop = $__env->getLastLoop(); ?>
+                                            <option value="<?php echo e($employee->id); ?>" <?php if(old('employee_id') == $employee->id): echo 'selected'; endif; ?>>
+                                                <?php echo e($employee->employee_code ? $employee->employee_code.' - ' : ''); ?><?php echo e(trim($employee->first_name.' '.$employee->last_name)); ?>
+
+                                                <?php if($employee->department): ?>
+                                                    (<?php echo e($employee->department); ?>)
+                                                <?php endif; ?>
                                             </option>
-                                        @endforeach
+                                        <?php endforeach; $__env->popLoop(); $loop = $__env->getLastLoop(); ?>
                                     </select>
                                 </div>
                                 <div class="col-6 col-lg-3">
                                     <label class="form-label">Date</label>
-                                    <input type="date" class="form-control" name="attendance_date" value="{{ old('attendance_date', $defaultAttendanceDate) }}" required>
+                                    <input type="date" class="form-control" name="attendance_date" value="<?php echo e(old('attendance_date', $defaultAttendanceDate)); ?>" required>
                                 </div>
                                 <div class="col-6 col-lg-3">
                                     <label class="form-label">Status</label>
                                     <select class="form-select" name="status" required>
-                                        @foreach($attendanceStatusLabels as $statusKey => $statusLabel)
-                                            <option value="{{ $statusKey }}" @selected(old('status') == $statusKey)>{{ $statusLabel }}</option>
-                                        @endforeach
+                                        <?php $__currentLoopData = $attendanceStatusLabels; $__env->addLoop($__currentLoopData); foreach($__currentLoopData as $statusKey => $statusLabel): $__env->incrementLoopIndices(); $loop = $__env->getLastLoop(); ?>
+                                            <option value="<?php echo e($statusKey); ?>" <?php if(old('status') == $statusKey): echo 'selected'; endif; ?>><?php echo e($statusLabel); ?></option>
+                                        <?php endforeach; $__env->popLoop(); $loop = $__env->getLastLoop(); ?>
                                     </select>
                                 </div>
                                 <div class="col-6 col-lg-3">
                                     <label class="form-label">Check In</label>
-                                    <input type="time" class="form-control" name="check_in" value="{{ old('check_in') }}">
+                                    <input type="time" class="form-control" name="check_in" value="<?php echo e(old('check_in')); ?>">
                                 </div>
                                 <div class="col-6 col-lg-3">
                                     <label class="form-label">Check Out</label>
-                                    <input type="time" class="form-control" name="check_out" value="{{ old('check_out') }}">
+                                    <input type="time" class="form-control" name="check_out" value="<?php echo e(old('check_out')); ?>">
                                 </div>
                                 <div class="col-12 col-lg-6">
                                     <label class="form-label">Notes</label>
-                                    <textarea class="form-control" name="notes" rows="2" placeholder="Optional notes about this attendance">{{ old('notes') }}</textarea>
+                                    <textarea class="form-control" name="notes" rows="2" placeholder="Optional notes about this attendance"><?php echo e(old('notes')); ?></textarea>
                                 </div>
                                 <div class="col-12 col-lg-6 d-flex align-items-end">
                                     <button type="submit" class="btn btn-primary w-100">Save Manual Attendance</button>
@@ -224,54 +226,56 @@
                         </div>
 
                         <div class="tab-pane fade" id="biometric-pane" role="tabpanel" aria-labelledby="biometric-tab">
-                            @if(session('biometricImportSuccess'))
+                            <?php if(session('biometricImportSuccess')): ?>
                                 <div class="alert alert-success" role="alert">
-                                    {{ session('biometricImportSuccess') }}
-                                </div>
-                            @endif
+                                    <?php echo e(session('biometricImportSuccess')); ?>
 
-                            @if(session('biometricImportSummary'))
-                                @php $summary = session('biometricImportSummary'); @endphp
+                                </div>
+                            <?php endif; ?>
+
+                            <?php if(session('biometricImportSummary')): ?>
+                                <?php $summary = session('biometricImportSummary'); ?>
                                 <div class="border rounded p-3 bg-light mb-3">
                                     <div class="d-flex flex-wrap gap-3">
                                         <div>
                                             <p class="mb-1 fw-semibold text-dark">Processed Rows</p>
-                                            <p class="mb-0">{{ $summary['processed_rows'] }}</p>
+                                            <p class="mb-0"><?php echo e($summary['processed_rows']); ?></p>
                                         </div>
                                         <div>
                                             <p class="mb-1 fw-semibold text-dark">Created / Updated</p>
-                                            <p class="mb-0">{{ $summary['created'] }} / {{ $summary['updated'] }}</p>
+                                            <p class="mb-0"><?php echo e($summary['created']); ?> / <?php echo e($summary['updated']); ?></p>
                                         </div>
                                         <div>
                                             <p class="mb-1 fw-semibold text-dark">Skipped Manual</p>
-                                            <p class="mb-0">{{ $summary['skipped_manual'] }}</p>
+                                            <p class="mb-0"><?php echo e($summary['skipped_manual']); ?></p>
                                         </div>
                                     </div>
-                                    @if(!empty($summary['missing_employees']))
+                                    <?php if(!empty($summary['missing_employees'])): ?>
                                         <hr class="my-3">
                                         <p class="mb-1 fw-semibold text-dark">Unknown Employee Codes</p>
-                                        <p class="mb-0">{{ implode(', ', $summary['missing_employees']) }}@if(isset($summary['missing_employees_more'])) +{{ $summary['missing_employees_more'] }} more @endif</p>
-                                    @endif
-                                    @if(!empty($summary['invalid_rows']))
+                                        <p class="mb-0"><?php echo e(implode(', ', $summary['missing_employees'])); ?><?php if(isset($summary['missing_employees_more'])): ?> +<?php echo e($summary['missing_employees_more']); ?> more <?php endif; ?></p>
+                                    <?php endif; ?>
+                                    <?php if(!empty($summary['invalid_rows'])): ?>
                                         <hr class="my-3">
                                         <p class="mb-1 fw-semibold text-dark">Invalid Rows</p>
                                         <ul class="small mb-0 ps-3">
-                                            @foreach($summary['invalid_rows'] as $invalid)
-                                                <li>Line {{ $invalid['line'] }} — {{ $invalid['reason'] }}</li>
-                                            @endforeach
+                                            <?php $__currentLoopData = $summary['invalid_rows']; $__env->addLoop($__currentLoopData); foreach($__currentLoopData as $invalid): $__env->incrementLoopIndices(); $loop = $__env->getLastLoop(); ?>
+                                                <li>Line <?php echo e($invalid['line']); ?> — <?php echo e($invalid['reason']); ?></li>
+                                            <?php endforeach; $__env->popLoop(); $loop = $__env->getLastLoop(); ?>
                                         </ul>
-                                    @endif
+                                    <?php endif; ?>
                                 </div>
-                            @endif
+                            <?php endif; ?>
 
-                            @if($errors->biometricImport?->any())
+                            <?php if($errors->biometricImport?->any()): ?>
                                 <div class="alert alert-danger" role="alert">
-                                    {{ $errors->biometricImport->first() }}
-                                </div>
-                            @endif
+                                    <?php echo e($errors->biometricImport->first()); ?>
 
-                            <form class="row g-3" method="POST" enctype="multipart/form-data" action="{{ route('superadmin.hr.attendance.import-biometric') }}">
-                                @csrf
+                                </div>
+                            <?php endif; ?>
+
+                            <form class="row g-3" method="POST" enctype="multipart/form-data" action="<?php echo e(route('superadmin.hr.attendance.import-biometric')); ?>">
+                                <?php echo csrf_field(); ?>
                                 <div class="col-12 col-lg-6">
                                     <label class="form-label">Upload CSV</label>
                                     <input type="file" class="form-control" name="biometric_file" accept=".csv,.txt" required>
@@ -279,9 +283,9 @@
                                 <div class="col-12 col-lg-6">
                                     <label class="form-label">Default Status</label>
                                     <select class="form-select" name="default_status">
-                                        @foreach($attendanceStatusLabels as $statusKey => $statusLabel)
-                                            <option value="{{ $statusKey }}" @selected(old('default_status') == $statusKey)>{{ $statusLabel }}</option>
-                                        @endforeach
+                                        <?php $__currentLoopData = $attendanceStatusLabels; $__env->addLoop($__currentLoopData); foreach($__currentLoopData as $statusKey => $statusLabel): $__env->incrementLoopIndices(); $loop = $__env->getLastLoop(); ?>
+                                            <option value="<?php echo e($statusKey); ?>" <?php if(old('default_status') == $statusKey): echo 'selected'; endif; ?>><?php echo e($statusLabel); ?></option>
+                                        <?php endforeach; $__env->popLoop(); $loop = $__env->getLastLoop(); ?>
                                     </select>
                                 </div>
                                 <div class="col-12">
@@ -315,7 +319,7 @@
                             <h5 class="card-title mb-1">Pending Leave Approvals</h5>
                             <p class="text-muted small mb-0">Review requests awaiting action.</p>
                         </div>
-                        <span class="badge bg-soft-primary text-primary">{{ $pendingLeaveRequests->count() }} pending</span>
+                        <span class="badge bg-soft-primary text-primary"><?php echo e($pendingLeaveRequests->count()); ?> pending</span>
                     </div>
                     <div class="table-responsive flex-grow-1">
                         <table class="table table-sm table-hover align-middle mb-0">
@@ -328,18 +332,18 @@
                                 </tr>
                             </thead>
                             <tbody>
-                                @forelse($pendingLeaveRequests as $request)
+                                <?php $__empty_1 = true; $__currentLoopData = $pendingLeaveRequests; $__env->addLoop($__currentLoopData); foreach($__currentLoopData as $request): $__env->incrementLoopIndices(); $loop = $__env->getLastLoop(); $__empty_1 = false; ?>
                                     <tr>
-                                        <td>{{ $request->employee_name ?? $request->user?->name ?? 'Employee' }}</td>
-                                        <td>{{ $request->leave_type }}</td>
-                                        <td>{{ \Carbon\Carbon::parse($request->from_date)->format('d M Y') }} – {{ \Carbon\Carbon::parse($request->to_date)->format('d M Y') }}</td>
-                                        <td class="text-end">{{ $request->getDaysHoursFormattedAttribute() ?? $request->days_hours }}</td>
+                                        <td><?php echo e($request->employee_name ?? $request->user?->name ?? 'Employee'); ?></td>
+                                        <td><?php echo e($request->leave_type); ?></td>
+                                        <td><?php echo e(\Carbon\Carbon::parse($request->from_date)->format('d M Y')); ?> – <?php echo e(\Carbon\Carbon::parse($request->to_date)->format('d M Y')); ?></td>
+                                        <td class="text-end"><?php echo e($request->getDaysHoursFormattedAttribute() ?? $request->days_hours); ?></td>
                                     </tr>
-                                @empty
+                                <?php endforeach; $__env->popLoop(); $loop = $__env->getLastLoop(); if ($__empty_1): ?>
                                     <tr>
                                         <td colspan="4" class="text-muted text-center py-4">No pending requests. Great job staying on top of approvals!</td>
                                     </tr>
-                                @endforelse
+                                <?php endif; ?>
                             </tbody>
                         </table>
                     </div>
@@ -355,7 +359,7 @@
                             <h5 class="card-title mb-1">Recent Attendance Updates</h5>
                             <p class="text-muted small mb-0">Latest manual or biometric adjustments.</p>
                         </div>
-                        <span class="badge bg-light text-dark">Last sync: {{ optional($recentAttendanceRecords->first())->updated_at?->diffForHumans() ?? '—' }}</span>
+                        <span class="badge bg-light text-dark">Last sync: <?php echo e(optional($recentAttendanceRecords->first())->updated_at?->diffForHumans() ?? '—'); ?></span>
                     </div>
                     <div class="table-responsive flex-grow-1">
                         <table class="table table-hover align-middle mb-0">
@@ -370,22 +374,22 @@
                                 </tr>
                             </thead>
                             <tbody>
-                                @forelse($recentAttendanceRecords as $record)
+                                <?php $__empty_1 = true; $__currentLoopData = $recentAttendanceRecords; $__env->addLoop($__currentLoopData); foreach($__currentLoopData as $record): $__env->incrementLoopIndices(); $loop = $__env->getLastLoop(); $__empty_1 = false; ?>
                                     <tr>
-                                        <td>{{ $record->employee?->full_name ?? 'Employee' }}</td>
-                                        <td>{{ $record->attendance_date?->format('d M Y') }}</td>
+                                        <td><?php echo e($record->employee?->full_name ?? 'Employee'); ?></td>
+                                        <td><?php echo e($record->attendance_date?->format('d M Y')); ?></td>
                                         <td>
-                                            <span class="badge bg-light text-dark">{{ $record->status_label }}</span>
+                                            <span class="badge bg-light text-dark"><?php echo e($record->status_label); ?></span>
                                         </td>
-                                        <td>{{ $record->check_in_at ? $record->check_in_at->format('H:i') : '—' }}</td>
-                                        <td>{{ $record->check_out_at ? $record->check_out_at->format('H:i') : '—' }}</td>
-                                        <td class="text-capitalize">{{ $record->source }}</td>
+                                        <td><?php echo e($record->check_in_at ? $record->check_in_at->format('H:i') : '—'); ?></td>
+                                        <td><?php echo e($record->check_out_at ? $record->check_out_at->format('H:i') : '—'); ?></td>
+                                        <td class="text-capitalize"><?php echo e($record->source); ?></td>
                                     </tr>
-                                @empty
+                                <?php endforeach; $__env->popLoop(); $loop = $__env->getLastLoop(); if ($__empty_1): ?>
                                     <tr>
                                         <td colspan="6" class="text-muted text-center py-4">No attendance updates yet. Add manual records or upload biometric logs to get started.</td>
                                     </tr>
-                                @endforelse
+                                <?php endif; ?>
                             </tbody>
                         </table>
                     </div>
@@ -394,9 +398,9 @@
         </div>
     </div>
 </div>
-@endsection
+<?php $__env->stopSection(); ?>
 
-@push('styles')
+<?php $__env->startPush('styles'); ?>
 <style>
 .attendance-hero-card {
     background: linear-gradient(135deg, #f4f8ff 0%, #eef2ff 100%);
@@ -453,9 +457,9 @@
     background: #f9fbff;
 }
 </style>
-@endpush
+<?php $__env->stopPush(); ?>
 
-@push('scripts')
+<?php $__env->startPush('scripts'); ?>
 <script>
 document.addEventListener('click', function (event) {
     const trigger = event.target.closest('[data-copy]');
@@ -478,4 +482,6 @@ document.addEventListener('click', function (event) {
     });
 });
 </script>
-@endpush
+<?php $__env->stopPush(); ?>
+
+<?php echo $__env->make('superadmin.layouts.app', array_diff_key(get_defined_vars(), ['__data' => 1, '__path' => 1]))->render(); ?><?php /**PATH C:\Mamp\htdocs\GenLabV2.0\resources\views/superadmin/hr/attendance/index.blade.php ENDPATH**/ ?>
