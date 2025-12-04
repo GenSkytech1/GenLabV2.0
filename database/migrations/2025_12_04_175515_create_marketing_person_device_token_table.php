@@ -1,0 +1,35 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::create('marketing_person_device_token', function (Blueprint $table) {
+            $table->id();
+
+            $table->unsignedBigInteger('marketing_person_id');
+            $table->string('device_token');
+
+            $table->foreign('marketing_person_id')
+                  ->references('id')->on('users')
+                  ->onDelete('cascade');
+
+            $table->timestamps();
+        });
+    }
+
+    /**
+     * Reverse the migrations.
+     */
+    public function down(): void
+    {
+        Schema::dropIfExists('marketing_person_device_token');
+    }
+};

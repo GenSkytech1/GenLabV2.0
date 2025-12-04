@@ -154,6 +154,12 @@ class User extends Authenticatable implements JWTSubject
     public function marketingBookings()
     {
         return $this->hasMany(NewBooking::class, 'marketing_id', 'user_code'); 
-    } 
+    }  
+
+
+    public function deviceTokens()
+    {
+        return $this->hasMany(MarketingPersonDeviceToken::class, 'marketing_person_id');
+    }
 
 }
