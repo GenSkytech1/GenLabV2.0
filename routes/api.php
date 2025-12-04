@@ -25,7 +25,8 @@ Route::prefix('user')->group(function () {
     Route::post('/logout', [UserAuthController::class, 'logout'])->middleware('multi_jwt:api');
     Route::post('/refresh', [UserAuthController::class, 'refresh'])->middleware('multi_jwt:api');
     Route::get('/profile', [UserAuthController::class, 'profile'])->middleware('multi_jwt:api');
-    Route::post('/user/device-token', [UserAuthController::class, 'saveDeviceToken'])->middleware('multi_jwt:api');
+
+    Route::post('/device-token', [UserAuthController::class, 'saveDeviceToken'])->middleware('multi_jwt:api');
 });
 
 // Admin Auth Routes

@@ -8,6 +8,9 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Validator;
 
+use App\Models\User; 
+use App\Models\MarketingPersonDeviceToken; 
+
 class UserAuthController extends Controller
 {
     public function login(Request $request)
@@ -35,11 +38,34 @@ class UserAuthController extends Controller
         return $this->respondWithToken($token);
     }
 
-    public function logout()
+    // public function logout()
+    // {
+    //     Auth::guard('api')->logout();
+    //     return response()->json(['message' => 'successfully logged out']);
+    // }
+    
+    public function logout(Request $request)
     {
+        // Validate incoming device token
+        $request->validate([
+            'device_token' => 'nullable|string'
+        ]);
+
+        $user = auth('api')->user();
+
+        $user->deviceTokens()
+            ->where('device_token', $request->device_token)
+            ->delete();
+
+        // Logout user session token
         Auth::guard('api')->logout();
-        return response()->json(['message' => 'successfully logged out']);
+
+        return response()->json([
+            'message' => 'Successfully logged out'
+        ]);
     }
+
+
 
     public function refresh()
     {
@@ -65,22 +91,19 @@ class UserAuthController extends Controller
     public function saveDeviceToken(Request $request)
     {
         $request->validate([
-            'device_token' => 'required|string',
-        ]); 
-        
-        // Print device token in terminal
-        \Log::info("Received Device Token:", [
-            'device_token' => $request->device_token
+            'user_id' => 'required|integer|exists:users,id',
+            'device_token' => 'required|string|unique:marketing_person_device_token,device_token',
         ]);
 
-        $user = auth()->user();  // Only if using auth
-
-        $user->device_token = $request->device_token;
-        $user->save();
+        // Create a new row (duplicates allowed for user but token must be unique)
+        $token = MarketingPersonDeviceToken::create([
+            'marketing_person_id' => $request->user_id,
+            'device_token' => $request->device_token,
+        ]);
 
         return response()->json([
             'message' => 'Device token saved successfully!'
         ]);
-    }
+    } 
 
 }

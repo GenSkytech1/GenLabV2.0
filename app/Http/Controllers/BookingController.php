@@ -17,6 +17,9 @@ use App\Services\FileUploadService;
 use App\Jobs\GenerateBookingCards;
 use App\Services\BookingCardService;
 use App\Services\FCMService; 
+use App\Jobs\SendMarketingNotificationJob;
+ 
+
 
 
 class BookingController extends Controller
@@ -75,10 +78,6 @@ class BookingController extends Controller
 
     public function store(StoreBookingRequest $request)
     {    
-        // dd($request->all());     
-        // exit; 
-
-        
         try {
             // Determine creator dynamically
             if (auth('admin')->check()) {
@@ -134,40 +133,25 @@ class BookingController extends Controller
                 return $booking;
             }); 
 
-            
-
             // ---------------------------
             // SEND NOTIFICATION TO MARKETING USER
             // ---------------------------
             $marketingUser = User::where('user_code', $request->marketing_id)->first();
             
-            // $token = "d7i163iGSaOqdfD12LJCBL:APA91bHcK8hn8dWonm6nRwG7oHisBc-oCmAaDllH-3tCNxjdX7rt-3O7t94NTaqyJnroyIEi-xHfg9chiHws79VrgTg6NlS1qVQjf0I-xCrOEV4SQbDx5i4"; 
-            
-            // $token = $marketingUser->device_token; 
-            $token = "d7i163iGSaOqdfD12LJCBL:APA91bHcK8hn8dWonm6nRwG7oHisBc-oCmAaDllH-3tCNxjdX7rt-3O7t94NTaqyJnroyIEi-xHfg9chiHws79VrgTg6NlS1qVQjf0I-xCrOEV4SQbDx5i4";
-
-            if ($marketingUser && $marketingUser->device_token) {
-
-                // Get response for debugging 
-
-                $fcmResponse = $this->fcmService->sendNotification(
-                    $token,
-                    "New Booking Assigned",
-                    "A new booking has been assigned to you.",
+            if ($marketingUser) {
+                SendMarketingNotificationJob::dispatch(
+                    $marketingUser,
+                    "New Booking assigned!",
+                    "New Booking assigned with Ref_No :{$request->reference_no}",
                     [
-                        "booking_id" => (string) $booking->id, // Convert to string
-                        "created_by" => auth()->user()->name ?? "System",
+                        "booking_id" => $booking->id,
+                        "updated_by" => auth()->id(),
+                        "status"     => $booking->status
                     ]
                 );
-                // // Debug print / Log
-                // Log::info("FCM Response:", [
-                //     "response" => $fcmResponse
-                // ]); 
-                // dd($fcmResponse);    
-                // exit; 
-                // If you want direct output (for testing only):
-                // dd($fcmResponse);
-            }
+            } 
+
+            
 
             return $this->bookingCardService->renderCardsForBooking($booking);            
 
